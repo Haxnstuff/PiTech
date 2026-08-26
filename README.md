@@ -1,6 +1,6 @@
 # PiTech
 
-A polished local browser UI for the real [pi agent harness](https://github.com/earendil-works/pi)**.
+A polished local browser UI for the **[pi agent harness](https://github.com/earendil-works/pi)**.
 
 PiTech runs the actual `pi` CLI inside a hidden PowerShell ConPTY and streams it to xterm.js. Pi keeps its normal colors, sessions, keybindings, tools, and behavior—the browser is only the interface.
 
