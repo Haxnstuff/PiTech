@@ -15,6 +15,7 @@
     <div class="wordmark">pi</div>
     <div class="divider" aria-hidden="true"></div>
     <button class="btn" id="new-project-btn" title="Create a project folder that collects past sessions">New Project</button>
+    <button class="btn" id="notepad-btn" title="Open a UI-only scratchpad">Notepad</button>
 
     <div class="header-signature" aria-hidden="true">HAXNSTUFF</div>
     <div class="spacer"></div>
@@ -93,6 +94,24 @@
     <div class="session-meta" id="session-meta"></div>
     <div class="session-body" id="session-body"></div>
     <div class="session-resize" id="session-resize" title="Drag to resize"></div>
+  </div>
+
+  <!-- Notepad panel (moveable + resizable, UI-only) -->
+  <div id="notepad-panel" class="notepad-panel hidden" role="dialog" aria-label="Notepad">
+    <div class="notepad-head" id="notepad-head" title="Drag to move">
+      <span class="notepad-title">Notepad</span>
+      <div class="notepad-actions">
+        <button class="icon-btn" id="notepad-rename" title="Rename current tab" aria-label="Rename current tab">✎</button>
+        <button class="icon-btn" id="notepad-close" title="Close" aria-label="Close">&times;</button>
+      </div>
+    </div>
+    <div class="notepad-tabs">
+      <div class="notepad-tab-list" id="notepad-tab-list" role="tablist" aria-label="Notepad tabs"></div>
+      <button class="notepad-new-tab" id="notepad-new-tab" title="New notepad" aria-label="New notepad">+</button>
+    </div>
+    <textarea id="notepad-textarea" class="notepad-textarea" placeholder="Write a note…" spellcheck="true"></textarea>
+    <div class="notepad-foot">UI only &middot; saved locally</div>
+    <div class="session-resize" id="notepad-resize" title="Drag to resize"></div>
   </div>
 
   <!-- Settings panel (moveable + resizable) -->
