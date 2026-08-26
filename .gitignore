@@ -1,0 +1,13 @@
+# PiTech by Haxnstuff — generated and machine-local files
+node_modules/
+config.json
+server.log
+public/vendor/
+chrome-test-profile/
+*.png
+.DS_Store
+Thumbs.db
+
+# Local diagnostics, not part of the framework
+procs.ps1
+test-ui.cjs

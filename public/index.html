@@ -1,0 +1,221 @@
+<!doctype html>
+<!-- PiTech by Haxnstuff -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PiTech — local pi webUI by Haxnstuff</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3.5' fill='%23a78bfa'/%3E%3Ctext x='8' y='12.5' font-size='11' font-family='monospace' font-weight='700' text-anchor='middle' fill='%2309090b'%3E%CF%80%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="vendor/xterm.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <div class="logo" aria-hidden="true">&pi;</div>
+    <div class="wordmark">pi</div>
+    <div class="divider" aria-hidden="true"></div>
+    <button class="btn" id="new-project-btn" title="Create a project folder that collects past sessions">New Project</button>
+
+    <div class="header-signature" aria-hidden="true">HAXNSTUFF</div>
+    <div class="spacer"></div>
+
+    <button class="btn icon" id="toggle-left" title="Toggle left sidebar" aria-label="Toggle left sidebar">
+      <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor"><rect x="1" y="2" width="5.5" height="12" rx="1.2"/><rect x="7.5" y="2" width="7.5" height="12" rx="1.2" opacity="0.35"/></svg>
+    </button>
+    <button class="btn icon" id="toggle-right" title="Toggle right sidebar" aria-label="Toggle right sidebar">
+      <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor"><rect x="1" y="2" width="7.5" height="12" rx="1.2" opacity="0.35"/><rect x="9.5" y="2" width="5.5" height="12" rx="1.2"/></svg>
+    </button>
+
+    <div class="status" title="Connection state">
+      <span class="dot" id="dot"></span>
+      <span id="status">connecting&hellip;</span>
+    </div>
+    <button class="btn" id="new-session" title="Send /new to pi (start a fresh session)">New</button>
+    <button class="btn" id="mcp-btn" title="Open the MCP servers panel">MCP</button>
+    <button class="btn" id="restart" title="Kill pi and start a fresh session">Restart</button>
+    <button class="btn" id="settings-btn" title="Settings" aria-label="Settings">Settings</button>
+  </header>
+
+  <main>
+    <aside id="sidebar-left" class="sidebar left">
+      <div class="side-head">Workspace</div>
+
+      <section class="side-section">
+        <h3 data-ctx="ctxhead">Context</h3>
+        <ul id="ctx-list" class="side-list"></ul>
+      </section>
+
+      <section class="side-section">
+        <h3 data-ctx="projhead">Projects <span class="hint">drop sessions here</span></h3>
+        <ul id="projects-list" class="side-list"></ul>
+      </section>
+
+      <section class="side-section grow">
+        <h3>Past Conversations</h3>
+        <ul id="conv-list" class="side-list"></ul>
+      </section>
+    </aside>
+
+    <div class="resizer left" id="resize-left" title="Drag to resize sidebar"></div>
+
+    <div id="term-wrap"><div id="term-host"></div></div>
+
+    <div class="resizer right" id="resize-right" title="Drag to resize sidebar"></div>
+
+    <aside id="sidebar-right" class="sidebar right">
+      <div class="side-head">Skills <span id="skill-count" class="hint"></span></div>
+      <div class="skill-controls">
+        <input id="skill-search" type="search" placeholder="Filter skills…" autocomplete="off" spellcheck="false" aria-label="Filter skills">
+        <label class="skill-filter"><input type="checkbox" id="skill-filter"> active only</label>
+      </div>
+      <div class="skill-legend"><span class="dot2 on"></span> active in current prompt</div>
+      <ul id="skills-list" class="side-list"></ul>
+    </aside>
+  </main>
+
+  <!-- MCP floating panel -->
+  <div id="mcp-panel" class="mcp-panel hidden" role="dialog" aria-label="MCP servers">
+    <div class="mcp-head" id="mcp-head" title="Drag to move">
+      <span class="mcp-title">MCP Servers</span>
+      <button class="icon-btn" id="mcp-close" title="Close" aria-label="Close">&times;</button>
+    </div>
+    <ul id="mcp-list" class="mcp-list"></ul>
+    <div class="mcp-foot">managed by pi &middot; ~/.pi/agent/mcp.json</div>
+    <div class="session-resize" id="mcp-resize" title="Drag to resize"></div>
+  </div>
+
+  <!-- Session viewer floating panel (moveable + resizable) -->
+  <div id="session-panel" class="session-panel hidden" role="dialog" aria-label="Conversation">
+    <div class="session-head" id="session-head" title="Drag to move">
+      <span class="session-title" id="session-title">Conversation</span>
+      <button class="icon-btn" id="session-close" title="Close" aria-label="Close">&times;</button>
+    </div>
+    <div class="session-meta" id="session-meta"></div>
+    <div class="session-body" id="session-body"></div>
+    <div class="session-resize" id="session-resize" title="Drag to resize"></div>
+  </div>
+
+  <!-- Settings panel (moveable + resizable) -->
+  <div id="settings-panel" class="settings-panel hidden" role="dialog" aria-label="Settings">
+    <div class="session-head" id="settings-head" title="Drag to move">
+      <span class="session-title">Settings</span>
+      <button class="icon-btn" id="settings-close" title="Close" aria-label="Close">&times;</button>
+    </div>
+    <div class="settings-body">
+      <section>
+        <h3>Customize</h3>
+        <div class="theme-swatches" id="theme-swatches"></div>
+        <div id="custom-colors" class="custom-colors hidden"></div>
+      </section>
+
+      <section>
+        <h3>MCP Servers <span class="hint">restart pi to load new servers</span></h3>
+        <div class="form-row">
+          <input id="mcp-name" placeholder="name (lowercase-hyphens)" autocomplete="off" spellcheck="false">
+          <select id="mcp-type" class="form-select">
+            <option value="http">http</option>
+            <option value="stdio">stdio</option>
+          </select>
+        </div>
+        <div class="form-row"><input id="mcp-endpoint" placeholder="https://… or full command" autocomplete="off" spellcheck="false"></div>
+        <div class="form-row">
+          <button class="btn primary" id="mcp-add">Add server</button>
+          <label class="skill-filter"><input type="checkbox" id="mcp-enabled" checked> enabled</label>
+        </div>
+        <ul id="settings-mcp-list" class="settings-list"></ul>
+      </section>
+
+      <section>
+        <h3>Skills <span class="hint">/reload in pi to load new skills</span></h3>
+        <div class="form-row"><input id="skill-name" placeholder="skill name (lowercase-hyphens)" autocomplete="off" spellcheck="false"></div>
+        <div class="form-row"><input id="skill-desc" placeholder="description — when to use it" autocomplete="off" spellcheck="false"></div>
+        <textarea id="skill-content" class="form-textarea" placeholder="Skill instructions (markdown)…"></textarea>
+        <div class="form-row"><button class="btn primary" id="skill-create">Create skill</button></div>
+        <div class="form-row"><input id="skill-import-path" placeholder="path to a skill folder or SKILL.md" autocomplete="off" spellcheck="false"></div>
+        <div class="form-row"><button class="btn" id="skill-import">Import skill</button></div>
+      </section>
+
+      <section>
+        <h3>Login</h3>
+        <p class="settings-note">OAuth providers open an interactive flow in the pi terminal.</p>
+        <div class="provider-btns" id="provider-btns"></div>
+        <h4>API key login</h4>
+        <div class="form-row"><input id="auth-provider" placeholder="provider (e.g. deepseek, openai)" autocomplete="off" spellcheck="false"></div>
+        <div class="form-row"><input id="auth-key" type="password" placeholder="API key" autocomplete="off"></div>
+        <div class="form-row"><button class="btn primary" id="auth-save">Save key</button></div>
+        <div class="settings-note" id="auth-status"></div>
+      </section>
+
+      <section>
+        <h3>About</h3>
+        <div class="settings-note" id="about-line"></div>
+      </section>
+    </div>
+    <div class="session-resize" id="settings-resize" title="Drag to resize"></div>
+  </div>
+
+  <!-- New Project modal -->
+  <div id="np-modal" class="modal hidden" role="dialog" aria-label="New project">
+    <div class="modal-box">
+      <div class="modal-title">New Project</div>
+      <p class="modal-sub">Creates a folder under <code>~/.pi/agent/projects</code> that collects past sessions for context.</p>
+      <input id="np-input" placeholder="Project name" autocomplete="off" spellcheck="false">
+      <div class="modal-actions">
+        <button class="btn" id="np-cancel">Cancel</button>
+        <button class="btn primary" id="np-ok">Create</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden" role="status"></div>
+
+  <!-- stale-tab banner: shows when the server's app version is newer than this page's -->
+  <div id="version-banner" class="version-banner hidden" role="alert">
+    <span>A newer version of the pi webUI is available — reload to get it</span>
+    <button class="btn primary" id="version-reload">Reload</button>
+  </div>
+
+  <!-- right-click context menu -->
+  <div id="ctx-menu" class="ctx-menu hidden"></div>
+
+  <!-- confirm modal (destructive actions) -->
+  <div id="confirm-modal" class="modal hidden" role="dialog" aria-label="Confirm">
+    <div class="modal-box">
+      <div class="modal-title" id="confirm-title">Are you sure?</div>
+      <p class="modal-sub" id="confirm-msg"></p>
+      <div class="modal-actions">
+        <button class="btn" id="confirm-cancel">Cancel</button>
+        <button class="btn danger" id="confirm-ok">Delete</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- prompt modal (names for new file/folder, rename) -->
+  <div id="prompt-modal" class="modal hidden" role="dialog" aria-label="Enter name">
+    <div class="modal-box">
+      <div class="modal-title" id="prompt-title">Enter a name</div>
+      <input id="prompt-input" placeholder="Name" autocomplete="off" spellcheck="false">
+      <div class="modal-actions">
+        <button class="btn" id="prompt-cancel">Cancel</button>
+        <button class="btn primary" id="prompt-ok">OK</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- conditional update buttons (bottom-right, only when updates exist) -->
+  <div id="update-btns" class="update-btns hidden">
+    <button class="update-btn" id="update-ext-btn" title="Update all installed pi extensions">
+      <span class="u-dot"></span>
+      <span class="u-body"><span class="u-label">Update Extensions</span><span class="u-sub" id="update-ext-sub"></span></span>
+    </button>
+    <button class="update-btn" id="update-pi-btn" title="Update pi itself">
+      <span class="u-dot"></span>
+      <span class="u-body"><span class="u-label">Update Pi</span><span class="u-sub" id="update-pi-sub"></span></span>
+    </button>
+  </div>
+
+  <script src="vendor/xterm.js"></script>
+  <script src="vendor/addon-fit.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

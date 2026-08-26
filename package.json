@@ -1,0 +1,27 @@
+{
+  "name": "pitech",
+  "version": "1.0.0",
+  "private": true,
+  "description": "PiTech — a local browser UI for the real pi coding agent",
+  "author": "Haxnstuff",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Haxnstuff/PiTech.git"
+  },
+  "homepage": "https://github.com/Haxnstuff/PiTech#readme",
+  "bugs": {
+    "url": "https://github.com/Haxnstuff/PiTech/issues"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "setup": "node setup.js",
+    "test": "node tests/release.test.cjs"
+  },
+  "dependencies": {
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/xterm": "^5.5.0",
+    "node-pty": "^1.1.0",
+    "ws": "^8.18.0"
+  }
+}
