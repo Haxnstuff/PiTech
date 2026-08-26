@@ -110,6 +110,7 @@ If Firefox does not allow clipboard copy or paste, enable its asynchronous clipb
 5. Reload PiTech at `http://127.0.0.1:8787`.
 
 If either preference does not exist, create a Boolean preference with the exact name and set it to `true`.
+(Note that in some Firefox browsers this will still not function correctly, fixes are on the way). 
 
 ## Attribution and license
 
