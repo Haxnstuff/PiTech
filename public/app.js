@@ -20,6 +20,14 @@
   const mcpList = $('mcp-list');
   const npModal = $('np-modal');
   const npInput = $('np-input');
+  const clipboard = PiTechClipboard.createClipboard({
+    readText: () => navigator.clipboard?.readText
+      ? navigator.clipboard.readText()
+      : Promise.reject(new Error('clipboard unavailable')),
+    writeText: (text) => navigator.clipboard?.writeText
+      ? navigator.clipboard.writeText(text)
+      : Promise.reject(new Error('clipboard unavailable')),
+  });
 
   let ws = null;
   let retryTimer = null;
@@ -27,7 +35,7 @@
   let state = null;
   let lastSig = '';
   let hashHandled = false;
-  const APP_VERSION = 5;
+  const APP_VERSION = 8;
   function showVersionBanner() {
     const b = $('version-banner');
     if (!b || !b.classList.contains('hidden')) return;
@@ -263,16 +271,13 @@
 
   term.onData((data) => send({ type: 'input', data }));
 
-  term.onSelectionChange(() => {
-    if (term.hasSelection()) navigator.clipboard?.writeText(term.getSelection());
-  });
   term.attachCustomKeyEventHandler((e) => {
     if (e.type !== 'keydown') return true;
     if (e.ctrlKey && e.shiftKey && (e.key === 'C' || e.key === 'V')) {
       if (e.key === 'C') {
-        if (term.hasSelection()) navigator.clipboard?.writeText(term.getSelection());
+        if (term.hasSelection()) copyText(term.getSelection());
       } else {
-        navigator.clipboard?.readText().then((t) => term.paste(t)).catch(() => {});
+        pasteToTerminal();
       }
       return false;
     }
@@ -952,8 +957,26 @@
     return (state && state.pins && state.pins[list]) || [];
   }
 
-  function copyText(t) {
-    navigator.clipboard?.writeText(t).then(() => showToast('Copied to clipboard')).catch(() => {});
+  async function copyText(value) {
+    const text = String(value ?? '');
+    if (!text) return false;
+    const systemCopy = await clipboard.copy(text);
+    showToast(systemCopy ? 'Copied to clipboard' : 'Copied inside PiTech — browser clipboard permission is blocked');
+    return true;
+  }
+  async function readClipboardText(silent = false) {
+    try {
+      return await clipboard.read();
+    } catch (error) {
+      if (!silent) showToast(error.message);
+      return '';
+    }
+  }
+  async function pasteToTerminal() {
+    const text = await readClipboardText();
+    if (!text) return;
+    term.focus();
+    term.paste(text);
   }
   function sendInput(data) { send({ type: 'input', data }); }
   function linkFor(kind, value) {
@@ -1042,7 +1065,7 @@
   let openLinkAdded = false;
   function maybeAppendOpenLink() {
     openLinkAdded = false;
-    navigator.clipboard?.readText().then((t) => {
+    readClipboardText(true).then((t) => {
       if (openLinkAdded || ctxMenu.classList.contains('hidden')) return;
       const m = String(t || '').trim().match(/^https?:\/\/\S+$/);
       if (!m) return;
@@ -1055,7 +1078,7 @@
       ctxMenu.appendChild(s);
       ctxMenu.appendChild(el);
       openLinkAdded = true;
-    }).catch(() => {});
+    });
   }
 
   function confirmModal(title, msg, okLabel, onOk) {
@@ -1100,9 +1123,9 @@
   function menuFor(ctx) {
     const items = [];
     if (ctx.kind === 'terminal') {
-      items.push({ label: 'Copy', disabled: !term.hasSelection(), run: () => { if (term.hasSelection()) navigator.clipboard?.writeText(term.getSelection()); } });
-      items.push({ label: 'Paste', run: () => { term.focus(); navigator.clipboard?.readText().then((t) => term.paste(t)).catch(() => {}); } });
-      items.push({ label: 'Paste without formatting', run: () => { term.focus(); navigator.clipboard?.readText().then((t) => term.paste(t)).catch(() => {}); } });
+      items.push({ label: 'Copy', disabled: !ctx.selection, run: () => copyText(ctx.selection) });
+      items.push({ label: 'Paste', run: pasteToTerminal });
+      items.push({ label: 'Paste without formatting', run: pasteToTerminal });
       items.push('sep');
       items.push({ label: 'Undo', run: () => sendInput('\u001a') });
       items.push({ label: 'Redo', run: () => sendInput('\u0019') });
@@ -1110,23 +1133,19 @@
     }
     if (ctx.kind === 'input') {
       const inp = ctx.el;
-      const sel = () => inp.value.slice(inp.selectionStart ?? inp.value.length, inp.selectionEnd ?? inp.value.length);
-      const hasSel = () => inp.selectionStart !== inp.selectionEnd;
-      const doPaste = () => {
+      const selected = ctx.selection;
+      const doPaste = async () => {
+        const text = await readClipboardText();
+        if (!text) return;
         inp.focus();
-        navigator.clipboard?.readText().then((t) => {
-          if (!t) return;
-          const a = inp.selectionStart ?? inp.value.length;
-          const b = inp.selectionEnd ?? inp.value.length;
-          inp.setRangeText(t, a, b, 'end');
-          inp.dispatchEvent(new Event('input', { bubbles: true }));
-        }).catch(() => {});
+        inp.setRangeText(text, selected.start, selected.end, 'end');
+        inp.dispatchEvent(new Event('input', { bubbles: true }));
       };
-      items.push({ label: 'Copy', disabled: !hasSel(), run: () => { if (hasSel()) navigator.clipboard?.writeText(sel()); } });
-      items.push({ label: 'Cut', disabled: !hasSel(), run: () => {
-        if (!hasSel()) return;
-        navigator.clipboard?.writeText(sel());
-        inp.setRangeText('', inp.selectionStart, inp.selectionEnd, 'end');
+      items.push({ label: 'Copy', disabled: !selected.text, run: () => copyText(selected.text) });
+      items.push({ label: 'Cut', disabled: !selected.text, run: () => {
+        if (!selected.text) return;
+        copyText(selected.text);
+        inp.setRangeText('', selected.start, selected.end, 'end');
         inp.dispatchEvent(new Event('input', { bubbles: true }));
       } });
       items.push({ label: 'Paste', run: doPaste });
@@ -1136,9 +1155,9 @@
       return items;
     }
     if (ctx.kind === 'generic') {
-      items.push({ label: 'Copy', disabled: !term.hasSelection(), run: () => { if (term.hasSelection()) navigator.clipboard?.writeText(term.getSelection()); } });
-      items.push({ label: 'Paste', run: () => { term.focus(); navigator.clipboard?.readText().then((t) => term.paste(t)).catch(() => {}); } });
-      items.push({ label: 'Paste without formatting', run: () => { term.focus(); navigator.clipboard?.readText().then((t) => term.paste(t)).catch(() => {}); } });
+      items.push({ label: 'Copy', disabled: !ctx.selection, run: () => copyText(ctx.selection) });
+      items.push({ label: 'Paste', run: pasteToTerminal });
+      items.push({ label: 'Paste without formatting', run: pasteToTerminal });
       return items;
     }
     const pinned = pinsOf(ctx.list).includes(ctx.name);
@@ -1218,6 +1237,23 @@
     return items;
   }
 
+  let rightClickInputSelection = null;
+  let rightClickTerminalSelection = '';
+  window.addEventListener('mousedown', (e) => {
+    if (e.button !== 2) return;
+    const t = e.target instanceof Element ? e.target : document.body;
+    const input = t.closest('input, textarea');
+    if (input) {
+      rightClickInputSelection = {
+        el: input,
+        selection: PiTechClipboard.captureSelection(input.value, input.selectionStart, input.selectionEnd),
+      };
+      return;
+    }
+    rightClickInputSelection = null;
+    if (t.closest('#term-wrap')) rightClickTerminalSelection = term.getSelection();
+  }, true);
+
   function resolveContext(target) {
     const t = target instanceof Element ? target : document.body;
     const el = t.closest('[data-ctx]');
@@ -1229,9 +1265,19 @@
       return ctx;
     }
     const inp = t.closest('input, textarea');
-    if (inp) return { kind: 'input', el: inp };
-    if (t.closest('#term-wrap')) return { kind: 'terminal' };
-    return { kind: 'generic' };
+    if (inp) {
+      const selection = rightClickInputSelection?.el === inp
+        ? rightClickInputSelection.selection
+        : PiTechClipboard.captureSelection(inp.value, inp.selectionStart, inp.selectionEnd);
+      rightClickInputSelection = null;
+      return { kind: 'input', el: inp, selection };
+    }
+    if (t.closest('#term-wrap')) {
+      const selection = rightClickTerminalSelection || term.getSelection();
+      rightClickTerminalSelection = '';
+      return { kind: 'terminal', selection };
+    }
+    return { kind: 'generic', selection: term.getSelection() };
   }
 
   // Capture phase on window: fires before xterm's own contextmenu handlers (or any
@@ -1239,6 +1285,14 @@
   window.addEventListener('contextmenu', (e) => {
     e.preventDefault();
     const ctx = resolveContext(e.target);
+    if (ctx.kind === 'terminal') {
+      e.stopPropagation();
+      if (!ctx.selection && !e.shiftKey) {
+        hideMenu();
+        pasteToTerminal();
+        return;
+      }
+    }
     const items = menuFor(ctx);
     if (items && items.length) showMenu(e.clientX, e.clientY, items, ctxLabelFor(ctx));
   }, true);
