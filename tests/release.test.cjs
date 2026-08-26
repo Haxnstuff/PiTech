@@ -34,7 +34,25 @@ assert.match(readme, /npm run setup/);
 assert.match(readme, /Haxnstuff/);
 assert.match(read('LICENSE'), /Copyright \(c\) 2026 Haxnstuff/);
 
+const html = read('public/index.html');
+assert.match(html, /<h4>Glow<\/h4>/);
+for (const id of ['glow-blur', 'glow-density', 'glow-pop', 'glow-color']) {
+  assert.match(html, new RegExp(`id="${id}"`), `settings must expose ${id}`);
+}
+assert.match(html, /id="glow-blur"[^>]*type="range"[^>]*min="0"[^>]*max="24"/);
+assert.match(html, /id="glow-density"[^>]*type="range"[^>]*min="0"[^>]*max="100"/);
+assert.match(html, /id="glow-pop"[^>]*type="range"[^>]*min="0"[^>]*max="100"/);
+
+const app = read('public/app.js');
+assert.match(app, /const GLOW_KEY = 'pi-glow'/);
+assert.match(app, /setProperty\('--glow-color'/);
+assert.match(app, /setProperty\('--glow-pop-alpha'/);
+assert.match(app, /glow-blur.*addEventListener\('input'/s);
+
 const css = read('public/style.css');
+assert.match(css, /--glow-color:/);
+assert.match(css, /--glow-blur:/);
+assert.match(css, /\.custom-colors\.hidden\s*{[^}]*display:\s*none/s);
 assert.match(css, /input\[type="checkbox"\]\s*{[^}]*appearance:\s*none/s);
 assert.match(css, /input\[type="checkbox"\]:checked::after\s*{[^}]*var\(--bg\)/s);
 assert.match(css, /\.custom-colors input\[type="color"\]\s*{[^}]*color-scheme:\s*dark/s);

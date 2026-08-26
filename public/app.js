@@ -35,7 +35,7 @@
   let state = null;
   let lastSig = '';
   let hashHandled = false;
-  const APP_VERSION = 8;
+  const APP_VERSION = 9;
   function showVersionBanner() {
     const b = $('version-banner');
     if (!b || !b.classList.contains('hidden')) return;
@@ -135,6 +135,41 @@
   };
   const DEFAULT_FONT = '"Cascadia Code", "Cascadia Mono", Consolas, "Courier New", monospace';
   const CUSTOM_KEY = 'pi-theme-custom';
+  const GLOW_KEY = 'pi-glow';
+  const DEFAULT_GLOW = { blur: 8, density: 55, pop: 65, color: null };
+  let glowSettings = (() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(GLOW_KEY) || 'null');
+      return { ...DEFAULT_GLOW, ...(saved && typeof saved === 'object' ? saved : {}) };
+    } catch { return { ...DEFAULT_GLOW }; }
+  })();
+  const clampGlow = (value, fallback, max) => {
+    const n = Number(value);
+    return Number.isFinite(n) ? Math.min(max, Math.max(0, n)) : fallback;
+  };
+  const validHex = (value) => /^#[0-9a-f]{6}$/i.test(String(value || '')) ? String(value) : null;
+  function hexRgb(hex) {
+    const m = /^#?([0-9a-f]{6})$/i.exec(hex);
+    if (!m) return null;
+    const n = parseInt(m[1], 16);
+    return `${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}`;
+  }
+  function applyGlow(fallbackColor) {
+    const blur = clampGlow(glowSettings.blur, DEFAULT_GLOW.blur, 24);
+    const density = clampGlow(glowSettings.density, DEFAULT_GLOW.density, 100) / 100;
+    const pop = clampGlow(glowSettings.pop, DEFAULT_GLOW.pop, 100) / 100;
+    const color = validHex(glowSettings.color) || validHex(fallbackColor) || '#a78bfa';
+    const rgb = hexRgb(color) || '167, 139, 250';
+    const root = document.documentElement;
+    root.style.setProperty('--glow-color', color);
+    root.style.setProperty('--glow-rgb', rgb);
+    root.style.setProperty('--glow-blur', `${blur}px`);
+    root.style.setProperty('--glow-density', String(density));
+    root.style.setProperty('--glow-pop', String(pop));
+    root.style.setProperty('--glow-alpha', (density * 0.45).toFixed(3));
+    root.style.setProperty('--glow-pop-blur', `${Math.round(blur * (0.35 + pop * 0.65))}px`);
+    root.style.setProperty('--glow-pop-alpha', (density * pop * 0.75).toFixed(3));
+  }
   let customVars = (() => {
     try { return JSON.parse(localStorage.getItem(CUSTOM_KEY) || 'null'); } catch { return null; }
   })() || { ...THEMES.slate.vars };
@@ -154,6 +189,7 @@
     document.documentElement.dataset.theme = name;
     const vars = name === 'custom' ? customVars : THEMES[name].vars;
     for (const [k, v] of Object.entries(vars)) document.documentElement.style.setProperty(k, v);
+    applyGlow(vars['--accent']);
     term.options.fontFamily = name === 'custom' ? DEFAULT_FONT : (THEMES[name].font || DEFAULT_FONT);
     const pal = name === 'custom' ? THEMES.slate.xterm : THEMES[name].xterm;
     term.options.theme = {
@@ -849,6 +885,7 @@
     applySettingsSaved();
     settingsPanel.classList.remove('hidden');
     renderThemeSwatches();
+    renderGlowControls();
     refreshSettingsData();
   }
   function closeSettings() { settingsPanel.classList.add('hidden'); }
@@ -856,6 +893,48 @@
     if (settingsPanel.classList.contains('hidden')) openSettings(); else closeSettings();
   });
   $('settings-close').addEventListener('click', closeSettings);
+
+  function activeAccent() {
+    const vars = currentTheme === 'custom' ? customVars : THEMES[currentTheme]?.vars;
+    return vars?.['--accent'] || THEMES.slate.vars['--accent'];
+  }
+
+  const GLOW_CONTROLS = [
+    { id: 'glow-blur', outputId: 'glow-blur-value', key: 'blur', suffix: 'px', max: 24 },
+    { id: 'glow-density', outputId: 'glow-density-value', key: 'density', suffix: '%', max: 100 },
+    { id: 'glow-pop', outputId: 'glow-pop-value', key: 'pop', suffix: '%', max: 100 },
+  ];
+
+  function renderGlowControls() {
+    for (const { id, outputId, key, suffix, max } of GLOW_CONTROLS) {
+      const input = $(id);
+      const output = $(outputId);
+      if (!input || !output) continue;
+      input.value = String(Math.round(clampGlow(glowSettings[key], DEFAULT_GLOW[key], max)));
+      output.textContent = input.value + suffix;
+    }
+    const color = $('glow-color');
+    if (color) color.value = validHex(glowSettings.color) || activeAccent();
+  }
+
+  function setupGlowControls() {
+    for (const { id, outputId, key, suffix, max } of GLOW_CONTROLS) {
+      const input = $(id);
+      const output = $(outputId);
+      input.addEventListener('input', () => {
+        glowSettings[key] = Math.round(clampGlow(input.value, DEFAULT_GLOW[key], max));
+        output.textContent = input.value + suffix;
+        localStorage.setItem(GLOW_KEY, JSON.stringify(glowSettings));
+        applyGlow(activeAccent());
+      });
+    }
+    $('glow-color').addEventListener('input', (e) => {
+      glowSettings.color = validHex(e.target.value);
+      localStorage.setItem(GLOW_KEY, JSON.stringify(glowSettings));
+      applyGlow(activeAccent());
+    });
+  }
+  setupGlowControls();
 
   async function refreshSettingsData() {
     try {

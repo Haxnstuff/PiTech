@@ -106,6 +106,26 @@
         <h3>Customize</h3>
         <div class="theme-swatches" id="theme-swatches"></div>
         <div id="custom-colors" class="custom-colors hidden"></div>
+        <div class="glow-controls" id="glow-controls">
+          <h4>Glow</h4>
+          <p class="settings-note">Tune the color and intensity of PiTech's accent glows.</p>
+          <label class="glow-control">
+            <span class="glow-control-head"><span>Blur</span><output id="glow-blur-value">8px</output></span>
+            <input id="glow-blur" type="range" min="0" max="24" step="1" value="8" aria-label="Glow blur">
+          </label>
+          <label class="glow-control">
+            <span class="glow-control-head"><span>Density</span><output id="glow-density-value">55%</output></span>
+            <input id="glow-density" type="range" min="0" max="100" step="1" value="55" aria-label="Glow density">
+          </label>
+          <label class="glow-control">
+            <span class="glow-control-head"><span>Pop</span><output id="glow-pop-value">65%</output></span>
+            <input id="glow-pop" type="range" min="0" max="100" step="1" value="65" aria-label="Glow pop">
+          </label>
+          <label class="glow-color-row" for="glow-color">
+            <span>Color</span>
+            <input id="glow-color" type="color" value="#a78bfa" aria-label="Glow color">
+          </label>
+        </div>
       </section>
 
       <section>
