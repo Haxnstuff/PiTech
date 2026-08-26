@@ -15,6 +15,7 @@
     <div class="wordmark">pi</div>
     <div class="divider" aria-hidden="true"></div>
     <button class="btn" id="new-project-btn" title="Create a project folder that collects past sessions">New Project</button>
+    <button class="btn" id="notepad-btn" title="Open a UI-only scratchpad">Notepad</button>
 
     <div class="header-signature" aria-hidden="true">HAXNSTUFF</div>
     <div class="spacer"></div>
@@ -95,6 +96,24 @@
     <div class="session-resize" id="session-resize" title="Drag to resize"></div>
   </div>
 
+  <!-- Notepad panel (moveable + resizable, UI-only) -->
+  <div id="notepad-panel" class="notepad-panel hidden" role="dialog" aria-label="Notepad">
+    <div class="notepad-head" id="notepad-head" title="Drag to move">
+      <span class="notepad-title">Notepad</span>
+      <div class="notepad-actions">
+        <button class="icon-btn" id="notepad-rename" title="Rename current tab" aria-label="Rename current tab">✎</button>
+        <button class="icon-btn" id="notepad-close" title="Close" aria-label="Close">&times;</button>
+      </div>
+    </div>
+    <div class="notepad-tabs">
+      <div class="notepad-tab-list" id="notepad-tab-list" role="tablist" aria-label="Notepad tabs"></div>
+      <button class="notepad-new-tab" id="notepad-new-tab" title="New notepad" aria-label="New notepad">+</button>
+    </div>
+    <textarea id="notepad-textarea" class="notepad-textarea" placeholder="Write a note…" spellcheck="true"></textarea>
+    <div class="notepad-foot">UI only &middot; saved locally</div>
+    <div class="session-resize" id="notepad-resize" title="Drag to resize"></div>
+  </div>
+
   <!-- Settings panel (moveable + resizable) -->
   <div id="settings-panel" class="settings-panel hidden" role="dialog" aria-label="Settings">
     <div class="session-head" id="settings-head" title="Drag to move">
@@ -106,6 +125,26 @@
         <h3>Customize</h3>
         <div class="theme-swatches" id="theme-swatches"></div>
         <div id="custom-colors" class="custom-colors hidden"></div>
+        <div class="glow-controls" id="glow-controls">
+          <h4>Glow</h4>
+          <p class="settings-note">Tune the color and intensity of PiTech's accent glows.</p>
+          <label class="glow-control">
+            <span class="glow-control-head"><span>Blur</span><output id="glow-blur-value">8px</output></span>
+            <input id="glow-blur" type="range" min="0" max="24" step="1" value="8" aria-label="Glow blur">
+          </label>
+          <label class="glow-control">
+            <span class="glow-control-head"><span>Density</span><output id="glow-density-value">55%</output></span>
+            <input id="glow-density" type="range" min="0" max="100" step="1" value="55" aria-label="Glow density">
+          </label>
+          <label class="glow-control">
+            <span class="glow-control-head"><span>Pop</span><output id="glow-pop-value">65%</output></span>
+            <input id="glow-pop" type="range" min="0" max="100" step="1" value="65" aria-label="Glow pop">
+          </label>
+          <label class="glow-color-row" for="glow-color">
+            <span>Color</span>
+            <input id="glow-color" type="color" value="#a78bfa" aria-label="Glow color">
+          </label>
+        </div>
       </section>
 
       <section>

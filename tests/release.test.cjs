@@ -15,7 +15,7 @@ assert.equal(pkg.version, '1.1.2');
 assert.equal(pkg.license, 'MIT');
 assert.equal(pkg.repository?.url, 'https://github.com/Haxnstuff/PiTech.git');
 assert.equal(pkg.scripts?.test, 'node --test tests/clipboard.test.cjs tests/project-context.test.mjs && node tests/release.test.cjs');
-assert.equal(pkg.scripts?.['test:browser'], 'node tests/clipboard-browser.cjs');
+assert.equal(pkg.scripts?.['test:browser'], 'node tests/clipboard-browser.cjs && node tests/notepad-browser.cjs');
 
 const ignored = read('.gitignore');
 for (const entry of ['node_modules/', 'config.json', 'server.log', 'public/vendor/', 'chrome-test-profile/']) {
@@ -34,11 +34,43 @@ assert.match(readme, /npm run setup/);
 assert.match(readme, /Haxnstuff/);
 assert.match(read('LICENSE'), /Copyright \(c\) 2026 Haxnstuff/);
 
+const html = read('public/index.html');
+assert.match(html, /<h4>Glow<\/h4>/);
+for (const id of ['glow-blur', 'glow-density', 'glow-pop', 'glow-color']) {
+  assert.match(html, new RegExp(`id="${id}"`), `settings must expose ${id}`);
+}
+for (const id of ['notepad-btn', 'notepad-panel', 'notepad-head', 'notepad-tab-list', 'notepad-textarea', 'notepad-new-tab', 'notepad-rename', 'notepad-resize']) {
+  assert.match(html, new RegExp(`id="${id}"`), `notepad must expose ${id}`);
+}
+assert.match(html, /id="new-project-btn"[\s\S]*id="notepad-btn"/);
+assert.match(html, /id="glow-blur"[^>]*type="range"[^>]*min="0"[^>]*max="24"/);
+assert.match(html, /id="glow-density"[^>]*type="range"[^>]*min="0"[^>]*max="100"/);
+assert.match(html, /id="glow-pop"[^>]*type="range"[^>]*min="0"[^>]*max="100"/);
+
+const app = read('public/app.js');
+assert.match(app, /const GLOW_KEY = 'pi-glow'/);
+assert.match(app, /setProperty\('--glow-color'/);
+assert.match(app, /setProperty\('--glow-pop-alpha'/);
+assert.match(app, /glow-blur.*addEventListener\('input'/s);
+assert.match(app, /const NOTEPAD_KEY = 'pi-notepads'/);
+assert.match(app, /makePanelMoveable\(notepadPanel, 'notepad-head', 'notepad-resize', 'pi-notepad-panel'\)/);
+assert.match(app, /notepadTextarea\.addEventListener\('input'/);
+assert.match(app, /tab\.dataset\.ctx = 'notepad-tab'/);
+assert.match(app, /label: 'Rename Tab'/);
+assert.match(app, /label: 'Delete Tab'/);
+assert.match(app, /function deleteNotepad/);
+assert.match(app, /notepadState\.activeId/);
+
 const css = read('public/style.css');
+assert.match(css, /--glow-color:/);
+assert.match(css, /--glow-blur:/);
+assert.match(css, /\.custom-colors\.hidden\s*{[^}]*display:\s*none/s);
 assert.match(css, /input\[type="checkbox"\]\s*{[^}]*appearance:\s*none/s);
 assert.match(css, /input\[type="checkbox"\]:checked::after\s*{[^}]*var\(--bg\)/s);
 assert.match(css, /\.custom-colors input\[type="color"\]\s*{[^}]*color-scheme:\s*dark/s);
 assert.match(css, /::-webkit-color-swatch-wrapper/);
+assert.match(css, /\.notepad-panel\s*{[^}]*background:\s*var\(--panel\)/s);
+assert.match(css, /\.notepad-textarea\s*{[^}]*background:\s*var\(--term-bg\)/s);
 
 for (const file of [
   'server.js',
@@ -48,6 +80,7 @@ for (const file of [
   'public/app.js',
   'public/clipboard.js',
   'public/style.css',
+  'tests/notepad-browser.cjs',
   'pi/extensions/pi-webui.ts',
   'pi/scripts/projects.mjs',
 ]) {

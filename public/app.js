@@ -20,6 +20,9 @@
   const mcpList = $('mcp-list');
   const npModal = $('np-modal');
   const npInput = $('np-input');
+  const notepadPanel = $('notepad-panel');
+  const notepadTabList = $('notepad-tab-list');
+  const notepadTextarea = $('notepad-textarea');
   const clipboard = PiTechClipboard.createClipboard({
     readText: () => navigator.clipboard?.readText
       ? navigator.clipboard.readText()
@@ -35,7 +38,7 @@
   let state = null;
   let lastSig = '';
   let hashHandled = false;
-  const APP_VERSION = 8;
+  const APP_VERSION = 10;
   function showVersionBanner() {
     const b = $('version-banner');
     if (!b || !b.classList.contains('hidden')) return;
@@ -48,6 +51,43 @@
   const openSkillGroups = new Set();
   let skillQuery = '';
   let skillActiveOnly = false;
+
+  const NOTEPAD_KEY = 'pi-notepads';
+  let notepadSaveWarned = false;
+  function createNotepadId() {
+    return globalThis.crypto?.randomUUID?.() || `note-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  }
+  function loadNotepadState() {
+    let saved = null;
+    try { saved = JSON.parse(localStorage.getItem(NOTEPAD_KEY) || 'null'); } catch {}
+    const notes = [];
+    const ids = new Set();
+    for (const raw of Array.isArray(saved?.notes) ? saved.notes : []) {
+      if (!raw || typeof raw !== 'object') continue;
+      const id = String(raw.id || '').trim();
+      if (!id || ids.has(id)) continue;
+      notes.push({
+        id,
+        title: String(raw.title || '').trim() || `Note ${notes.length + 1}`,
+        content: typeof raw.content === 'string' ? raw.content : '',
+      });
+      ids.add(id);
+    }
+    if (!notes.length) notes.push({ id: 'note-1', title: 'Note 1', content: '' });
+    const activeId = notes.some((note) => note.id === saved?.activeId) ? saved.activeId : notes[0].id;
+    return { activeId, notes };
+  }
+  let notepadState = loadNotepadState();
+  function saveNotepadState() {
+    try {
+      localStorage.setItem(NOTEPAD_KEY, JSON.stringify(notepadState));
+    } catch {
+      if (!notepadSaveWarned) {
+        notepadSaveWarned = true;
+        showToast('Notepad could not be saved locally');
+      }
+    }
+  }
 
   // ---------------- terminal ----------------
   const term = new Terminal({
@@ -135,6 +175,41 @@
   };
   const DEFAULT_FONT = '"Cascadia Code", "Cascadia Mono", Consolas, "Courier New", monospace';
   const CUSTOM_KEY = 'pi-theme-custom';
+  const GLOW_KEY = 'pi-glow';
+  const DEFAULT_GLOW = { blur: 8, density: 55, pop: 65, color: null };
+  let glowSettings = (() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(GLOW_KEY) || 'null');
+      return { ...DEFAULT_GLOW, ...(saved && typeof saved === 'object' ? saved : {}) };
+    } catch { return { ...DEFAULT_GLOW }; }
+  })();
+  const clampGlow = (value, fallback, max) => {
+    const n = Number(value);
+    return Number.isFinite(n) ? Math.min(max, Math.max(0, n)) : fallback;
+  };
+  const validHex = (value) => /^#[0-9a-f]{6}$/i.test(String(value || '')) ? String(value) : null;
+  function hexRgb(hex) {
+    const m = /^#?([0-9a-f]{6})$/i.exec(hex);
+    if (!m) return null;
+    const n = parseInt(m[1], 16);
+    return `${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}`;
+  }
+  function applyGlow(fallbackColor) {
+    const blur = clampGlow(glowSettings.blur, DEFAULT_GLOW.blur, 24);
+    const density = clampGlow(glowSettings.density, DEFAULT_GLOW.density, 100) / 100;
+    const pop = clampGlow(glowSettings.pop, DEFAULT_GLOW.pop, 100) / 100;
+    const color = validHex(glowSettings.color) || validHex(fallbackColor) || '#a78bfa';
+    const rgb = hexRgb(color) || '167, 139, 250';
+    const root = document.documentElement;
+    root.style.setProperty('--glow-color', color);
+    root.style.setProperty('--glow-rgb', rgb);
+    root.style.setProperty('--glow-blur', `${blur}px`);
+    root.style.setProperty('--glow-density', String(density));
+    root.style.setProperty('--glow-pop', String(pop));
+    root.style.setProperty('--glow-alpha', (density * 0.45).toFixed(3));
+    root.style.setProperty('--glow-pop-blur', `${Math.round(blur * (0.35 + pop * 0.65))}px`);
+    root.style.setProperty('--glow-pop-alpha', (density * pop * 0.75).toFixed(3));
+  }
   let customVars = (() => {
     try { return JSON.parse(localStorage.getItem(CUSTOM_KEY) || 'null'); } catch { return null; }
   })() || { ...THEMES.slate.vars };
@@ -154,6 +229,7 @@
     document.documentElement.dataset.theme = name;
     const vars = name === 'custom' ? customVars : THEMES[name].vars;
     for (const [k, v] of Object.entries(vars)) document.documentElement.style.setProperty(k, v);
+    applyGlow(vars['--accent']);
     term.options.fontFamily = name === 'custom' ? DEFAULT_FONT : (THEMES[name].font || DEFAULT_FONT);
     const pal = name === 'custom' ? THEMES.slate.xterm : THEMES[name].xterm;
     term.options.theme = {
@@ -676,6 +752,7 @@
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && !mcpPanel.classList.contains('hidden')) closeMcp();
     if (e.key === 'Escape' && !sessPanel.classList.contains('hidden')) closeSessionPanel();
+    if (e.key === 'Escape' && !notepadPanel.classList.contains('hidden')) closeNotepad();
     if (e.key === 'Escape' && !npModal.classList.contains('hidden')) closeNp();
     if (e.key === 'Escape' && !$('confirm-modal').classList.contains('hidden')) $('confirm-cancel').click();
     if (e.key === 'Escape' && !$('prompt-modal').classList.contains('hidden')) $('prompt-cancel').click();
@@ -746,6 +823,93 @@
   }
   const applySessionSaved = makePanelMoveable(sessPanel, 'session-head', 'session-resize', 'pi-sess-panel');
   const applySettingsSaved = makePanelMoveable($('settings-panel'), 'settings-head', 'settings-resize', 'pi-settings-panel');
+  const applyNotepadSaved = makePanelMoveable(notepadPanel, 'notepad-head', 'notepad-resize', 'pi-notepad-panel');
+
+  function activeNotepad() {
+    return notepadState.notes.find((note) => note.id === notepadState.activeId) || notepadState.notes[0];
+  }
+  function renderNotepad() {
+    const active = activeNotepad();
+    notepadTabList.replaceChildren();
+    for (const note of notepadState.notes) {
+      const tab = document.createElement('button');
+      tab.type = 'button';
+      tab.className = 'notepad-tab' + (note.id === active.id ? ' active' : '');
+      tab.setAttribute('role', 'tab');
+      tab.setAttribute('aria-selected', String(note.id === active.id));
+      tab.setAttribute('aria-controls', 'notepad-textarea');
+      tab.dataset.ctx = 'notepad-tab';
+      tab.dataset.id = note.id;
+      tab.dataset.name = note.title;
+      tab.title = note.title;
+      tab.textContent = note.title;
+      tab.addEventListener('click', () => selectNotepad(note.id));
+      notepadTabList.appendChild(tab);
+    }
+    notepadTextarea.value = active.content;
+  }
+  function selectNotepad(id) {
+    if (!notepadState.notes.some((note) => note.id === id)) return;
+    notepadState.activeId = id;
+    saveNotepadState();
+    renderNotepad();
+    notepadTextarea.focus();
+  }
+  function newNotepad() {
+    let number = notepadState.notes.length + 1;
+    while (notepadState.notes.some((note) => note.title === `Note ${number}`)) number++;
+    const note = { id: createNotepadId(), title: `Note ${number}`, content: '' };
+    notepadState.notes.push(note);
+    notepadState.activeId = note.id;
+    saveNotepadState();
+    renderNotepad();
+    notepadTextarea.focus();
+  }
+  function renameNotepad(id = notepadState.activeId) {
+    const note = notepadState.notes.find((item) => item.id === id);
+    if (!note) return;
+    promptModal('Rename Tab', note.title, (title) => {
+      note.title = title;
+      saveNotepadState();
+      renderNotepad();
+      notepadTextarea.focus();
+    });
+  }
+  function deleteNotepad(id = notepadState.activeId) {
+    const index = notepadState.notes.findIndex((note) => note.id === id);
+    if (index < 0) return;
+    const note = notepadState.notes[index];
+    confirmModal('Delete Tab?', `Delete "${note.title}"? This cannot be undone.`, 'Delete', () => {
+      if (notepadState.notes.length === 1) {
+        const replacement = { id: createNotepadId(), title: 'Note 1', content: '' };
+        notepadState.notes.splice(0, 1, replacement);
+        notepadState.activeId = replacement.id;
+      } else {
+        notepadState.notes.splice(index, 1);
+        if (notepadState.activeId === id) notepadState.activeId = notepadState.notes[Math.min(index, notepadState.notes.length - 1)].id;
+      }
+      saveNotepadState();
+      renderNotepad();
+      notepadTextarea.focus();
+    });
+  }
+  function openNotepad() {
+    applyNotepadSaved();
+    renderNotepad();
+    notepadPanel.classList.remove('hidden');
+    setTimeout(() => notepadTextarea.focus(), 30);
+  }
+  function closeNotepad() { notepadPanel.classList.add('hidden'); }
+  $('notepad-btn').addEventListener('click', () => {
+    if (notepadPanel.classList.contains('hidden')) openNotepad(); else notepadTextarea.focus();
+  });
+  $('notepad-close').addEventListener('click', closeNotepad);
+  $('notepad-new-tab').addEventListener('click', newNotepad);
+  $('notepad-rename').addEventListener('click', () => renameNotepad());
+  notepadTextarea.addEventListener('input', () => {
+    activeNotepad().content = notepadTextarea.value;
+    saveNotepadState();
+  });
 
   function loadSession(file, title) {
     sessTitle.textContent = title || 'Conversation';
@@ -849,6 +1013,7 @@
     applySettingsSaved();
     settingsPanel.classList.remove('hidden');
     renderThemeSwatches();
+    renderGlowControls();
     refreshSettingsData();
   }
   function closeSettings() { settingsPanel.classList.add('hidden'); }
@@ -856,6 +1021,48 @@
     if (settingsPanel.classList.contains('hidden')) openSettings(); else closeSettings();
   });
   $('settings-close').addEventListener('click', closeSettings);
+
+  function activeAccent() {
+    const vars = currentTheme === 'custom' ? customVars : THEMES[currentTheme]?.vars;
+    return vars?.['--accent'] || THEMES.slate.vars['--accent'];
+  }
+
+  const GLOW_CONTROLS = [
+    { id: 'glow-blur', outputId: 'glow-blur-value', key: 'blur', suffix: 'px', max: 24 },
+    { id: 'glow-density', outputId: 'glow-density-value', key: 'density', suffix: '%', max: 100 },
+    { id: 'glow-pop', outputId: 'glow-pop-value', key: 'pop', suffix: '%', max: 100 },
+  ];
+
+  function renderGlowControls() {
+    for (const { id, outputId, key, suffix, max } of GLOW_CONTROLS) {
+      const input = $(id);
+      const output = $(outputId);
+      if (!input || !output) continue;
+      input.value = String(Math.round(clampGlow(glowSettings[key], DEFAULT_GLOW[key], max)));
+      output.textContent = input.value + suffix;
+    }
+    const color = $('glow-color');
+    if (color) color.value = validHex(glowSettings.color) || activeAccent();
+  }
+
+  function setupGlowControls() {
+    for (const { id, outputId, key, suffix, max } of GLOW_CONTROLS) {
+      const input = $(id);
+      const output = $(outputId);
+      input.addEventListener('input', () => {
+        glowSettings[key] = Math.round(clampGlow(input.value, DEFAULT_GLOW[key], max));
+        output.textContent = input.value + suffix;
+        localStorage.setItem(GLOW_KEY, JSON.stringify(glowSettings));
+        applyGlow(activeAccent());
+      });
+    }
+    $('glow-color').addEventListener('input', (e) => {
+      glowSettings.color = validHex(e.target.value);
+      localStorage.setItem(GLOW_KEY, JSON.stringify(glowSettings));
+      applyGlow(activeAccent());
+    });
+  }
+  setupGlowControls();
 
   async function refreshSettingsData() {
     try {
@@ -1043,6 +1250,7 @@
       case 'mcprow': return 'MCP server · ' + ctx.name;
       case 'ctxhead': return 'context folder';
       case 'projhead': return 'projects';
+      case 'notepad-tab': return 'notepad tab · ' + ctx.name;
       default: return String(ctx.kind || 'pi');
     }
   }
@@ -1160,6 +1368,11 @@
       items.push({ label: 'Paste without formatting', run: pasteToTerminal });
       return items;
     }
+    if (ctx.kind === 'notepad-tab') {
+      items.push({ label: 'Rename Tab', run: () => renameNotepad(ctx.id) });
+      items.push({ label: 'Delete Tab', danger: true, run: () => deleteNotepad(ctx.id) });
+      return items;
+    }
     const pinned = pinsOf(ctx.list).includes(ctx.name);
     if (ctx.list) {
       items.push({ label: pinned ? 'Unpin' : 'Pin', run: () => togglePin(ctx.list, ctx.name, !pinned) });
@@ -1258,7 +1471,7 @@
     const t = target instanceof Element ? target : document.body;
     const el = t.closest('[data-ctx]');
     if (el) {
-      const ctx = { kind: el.dataset.ctx, name: el.dataset.name || '', path: el.dataset.path || '', endpoint: el.dataset.endpoint || '', enabled: el.dataset.enabled !== '0', disabled: el.dataset.disabled === '1' };
+      const ctx = { kind: el.dataset.ctx, id: el.dataset.id || '', name: el.dataset.name || '', path: el.dataset.path || '', endpoint: el.dataset.endpoint || '', enabled: el.dataset.enabled !== '0', disabled: el.dataset.disabled === '1' };
       if (ctx.kind === 'skill' || ctx.kind === 'mcprow') ctx.list = ctx.kind === 'skill' ? 'skills' : 'mcp';
       else if (ctx.kind === 'convgroup') ctx.list = 'conversations';
       else if (ctx.kind === 'project') ctx.list = 'projects';

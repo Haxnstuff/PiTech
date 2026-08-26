@@ -17,7 +17,7 @@
     "start": "node server.js",
     "setup": "node setup.js",
     "test": "node --test tests/clipboard.test.cjs tests/project-context.test.mjs && node tests/release.test.cjs",
-    "test:browser": "node tests/clipboard-browser.cjs"
+    "test:browser": "node tests/clipboard-browser.cjs && node tests/notepad-browser.cjs"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.10.0",
