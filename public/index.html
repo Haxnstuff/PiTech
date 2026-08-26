@@ -97,7 +97,7 @@
   </div>
 
   <!-- Notepad panel (moveable + resizable, UI-only) -->
-  <div id="notepad-panel" class="notepad-panel hidden" role="dialog" aria-label="Notepad">
+  <dialog id="notepad-panel" class="notepad-panel hidden" aria-label="Notepad" open>
     <div class="notepad-head" id="notepad-head" title="Drag to move">
       <span class="notepad-title">Notepad</span>
       <div class="notepad-actions">
@@ -109,10 +109,10 @@
       <div class="notepad-tab-list" id="notepad-tab-list" role="tablist" aria-label="Notepad tabs"></div>
       <button class="notepad-new-tab" id="notepad-new-tab" title="New notepad" aria-label="New notepad">+</button>
     </div>
-    <textarea id="notepad-textarea" class="notepad-textarea" placeholder="Write a note…" spellcheck="true"></textarea>
+    <textarea id="notepad-textarea" class="notepad-textarea" placeholder="Write a note…" aria-label="Notepad text" spellcheck="true"></textarea>
     <div class="notepad-foot">UI only &middot; saved locally</div>
     <div class="session-resize" id="notepad-resize" title="Drag to resize"></div>
-  </div>
+  </dialog>
 
   <!-- Settings panel (moveable + resizable) -->
   <div id="settings-panel" class="settings-panel hidden" role="dialog" aria-label="Settings">

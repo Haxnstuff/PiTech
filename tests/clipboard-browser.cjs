@@ -2,82 +2,12 @@
 'use strict';
 
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const http = require('node:http');
-const os = require('node:os');
-const path = require('node:path');
-const { spawn, spawnSync } = require('node:child_process');
-const WebSocket = require('ws');
-
-const appUrl = process.env.PITECH_URL || 'http://127.0.0.1:8787';
-const chrome = process.env.CHROME_PATH || (process.platform === 'win32'
-  ? path.join(process.env.PROGRAMFILES || 'C:\\Program Files', 'Google', 'Chrome', 'Application', 'chrome.exe')
-  : 'google-chrome');
-const port = 9300 + Math.floor(Math.random() * 500);
-const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'pitech-browser-'));
-const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-function request(route, method = 'GET', parse = true) {
-  return new Promise((resolve, reject) => {
-    const req = http.request(`http://127.0.0.1:${port}${route}`, { method }, (res) => {
-      let body = '';
-      res.on('data', (chunk) => { body += chunk; });
-      res.on('end', () => {
-        if (!parse) return resolve(body);
-        try { resolve(JSON.parse(body)); } catch (error) { reject(error); }
-      });
-    });
-    req.on('error', reject);
-    req.end();
-  });
-}
+const { openBrowserHarness, wait } = require('./browser-harness.cjs');
 
 async function main() {
-  await new Promise((resolve, reject) => {
-    http.get(appUrl, (res) => { res.resume(); res.statusCode === 200 ? resolve() : reject(new Error(`PiTech returned ${res.statusCode}`)); }).on('error', reject);
-  });
-
-  const child = spawn(chrome, [
-    '--headless', '--disable-gpu', '--disable-extensions', '--disable-background-networking',
-    '--disable-crash-reporter', `--remote-debugging-port=${port}`,
-    `--user-data-dir=${profile}`, '--no-first-run', 'about:blank',
-  ], { stdio: 'ignore' });
-
-  let tab;
+  const browser = await openBrowserHarness({ profilePrefix: 'pitech-browser-', portStart: 9300, portEnd: 9800 });
+  const { appUrl, send, evaluate, clickPoint, sentFrames, jsErrors } = browser;
   try {
-    for (let i = 0; i < 40; i++) {
-      try { await request('/json/version'); break; } catch { await wait(100); }
-    }
-    tab = await request(`/json/new?${encodeURIComponent(appUrl)}`, 'PUT');
-    const socket = new WebSocket(tab.webSocketDebuggerUrl);
-    let id = 0;
-    const pending = new Map();
-    const sentFrames = [];
-    const jsErrors = [];
-    socket.on('message', (raw) => {
-      const message = JSON.parse(raw);
-      if (message.id && pending.has(message.id)) {
-        pending.get(message.id)(message);
-        pending.delete(message.id);
-      }
-      if (message.method === 'Network.webSocketFrameSent') sentFrames.push(message.params.response.payloadData);
-      if (message.method === 'Runtime.exceptionThrown') jsErrors.push(message.params.exceptionDetails.exception?.description || message.params.exceptionDetails.text);
-      if (message.method === 'Log.entryAdded' && message.params.entry.level === 'error') jsErrors.push(message.params.entry.text);
-    });
-    await new Promise((resolve) => socket.on('open', resolve));
-    const send = (method, params = {}) => new Promise((resolve) => {
-      const callId = ++id;
-      pending.set(callId, resolve);
-      socket.send(JSON.stringify({ id: callId, method, params }));
-    });
-    const evaluate = async (expression) => (await send('Runtime.evaluate', {
-      expression, awaitPromise: true, returnByValue: true,
-    })).result.result.value;
-    const click = async (point, button = 'left') => {
-      await send('Input.dispatchMouseEvent', { type: 'mousePressed', ...point, button, clickCount: 1 });
-      await send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...point, button, clickCount: 1 });
-    };
-
     await send('Runtime.enable');
     await send('Network.enable');
     await send('Log.enable');
@@ -113,7 +43,7 @@ async function main() {
       const r = item.getBoundingClientRect();
       return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
     })()`);
-    await click(copyPoint);
+    await clickPoint(copyPoint);
     await wait(150);
     assert.equal(await evaluate(`document.getElementById('toast').textContent`), 'Copied to clipboard', 'Firefox fallback must report a successful copy');
 
@@ -131,7 +61,7 @@ async function main() {
       const r = item.getBoundingClientRect();
       return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
     })()`);
-    await click(pastePoint);
+    await clickPoint(pastePoint);
     await wait(150);
     assert.equal(await evaluate(`document.getElementById('clipboard-test-input').value`), 'ATestB', 'input paste must use the right-click caret captured before the menu took focus');
 
@@ -151,7 +81,7 @@ async function main() {
       const r = document.getElementById('term-wrap').getBoundingClientRect();
       return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
     })()`);
-    await click(terminalPoint, 'right');
+    await clickPoint(terminalPoint, 'right');
     await wait(300);
     const pasted = sentFrames.slice(before).map((frame) => {
       try {
@@ -173,16 +103,9 @@ async function main() {
     await send('Input.dispatchKeyEvent', { type: 'keyUp', modifiers: 2, key: 'c', code: 'KeyC', windowsVirtualKeyCode: 67 });
     await wait(100);
     assert.deepEqual(jsErrors, [], `browser JavaScript errors:\n${jsErrors.join('\n')}`);
-    socket.close();
     console.log('PiTech clipboard browser checks passed');
   } finally {
-    if (tab) await request(`/json/close/${tab.id}`, 'GET', false).catch(() => {});
-    if (process.platform === 'win32') {
-      const escaped = profile.replace(/'/g, "''");
-      spawnSync('powershell.exe', ['-NoProfile', '-Command', `Get-CimInstance Win32_Process -Filter "Name = 'chrome.exe'" | Where-Object { $_.CommandLine -like '*${escaped}*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`], { stdio: 'ignore' });
-    } else child.kill('SIGKILL');
-    await wait(500);
-    try { fs.rmSync(profile, { recursive: true, force: true }); } catch {}
+    await browser.close();
   }
 }
 

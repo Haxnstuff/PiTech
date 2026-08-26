@@ -1,9 +1,19 @@
 // PiTech by Haxnstuff
 (function (root, factory) {
-  const api = factory(root);
+  function captureSelection(value, start, end) {
+    const text = String(value ?? '');
+    const clamp = (n) => Math.max(0, Math.min(text.length, Number.isInteger(n) ? n : text.length));
+    const a = clamp(start);
+    const b = clamp(end);
+    const from = Math.min(a, b);
+    const to = Math.max(a, b);
+    return { start: from, end: to, text: text.slice(from, to) };
+  }
+
+  const api = factory(root, captureSelection);
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.PiTechClipboard = api;
-})(typeof window === 'undefined' ? globalThis : window, function (root) {
+})(typeof window === 'undefined' ? globalThis : window, function (root, captureSelection) {
   'use strict';
 
   function copyWithExecCommand(text, doc = root.document) {
@@ -21,7 +31,6 @@
       copied = doc.execCommand('copy') === true;
     } catch {}
     area.remove?.();
-    if (area.parentNode) area.parentNode.removeChild(area);
     active?.focus?.();
     return copied;
   }
@@ -57,16 +66,6 @@
         }
       },
     };
-  }
-
-  function captureSelection(value, start, end) {
-    const text = String(value ?? '');
-    const clamp = (n) => Math.max(0, Math.min(text.length, Number.isInteger(n) ? n : text.length));
-    const a = clamp(start);
-    const b = clamp(end);
-    const from = Math.min(a, b);
-    const to = Math.max(a, b);
-    return { start: from, end: to, text: text.slice(from, to) };
   }
 
   return { createClipboard, captureSelection, copyWithExecCommand };

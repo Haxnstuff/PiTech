@@ -372,10 +372,10 @@ body.resizing * { cursor: col-resize !important; }
   animation: pop 0.18s ease;
 }
 .mcp-panel.hidden { display: none; }
-.mcp-head { cursor: move; }
 @keyframes pop { from { opacity: 0; transform: translateY(-6px) scale(0.98); } to { opacity: 1; transform: none; } }
 
 .mcp-head {
+  cursor: move;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -482,6 +482,8 @@ body.resizing * { cursor: col-resize !important; }
 /* ---------- Notepad floating panel (UI-only) ---------- */
 .notepad-panel {
   position: fixed;
+  margin: 0;
+  padding: 0;
   left: max(14px, calc(50vw - 180px));
   top: 76px;
   display: flex;

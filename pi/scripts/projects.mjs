@@ -122,11 +122,11 @@ function messageLine(message) {
     return summary ? `Summary: ${summary}` : null;
   }
   if (message.role !== "user" && message.role !== "assistant") return null;
-  const content = typeof message.content === "string"
-    ? message.content
-    : Array.isArray(message.content)
-      ? message.content.filter((part) => part?.type === "text").map((part) => part.text).join(" ")
-      : "";
+  let content = "";
+  if (typeof message.content === "string") content = message.content;
+  else if (Array.isArray(message.content)) {
+    content = message.content.filter((part) => part?.type === "text").map((part) => part.text).join(" ");
+  }
   const text = String(content).replace(/\s+/g, " ").trim();
   if (!text) return null;
   return `${message.role === "user" ? "User" : "Assistant"}: ${text}`;

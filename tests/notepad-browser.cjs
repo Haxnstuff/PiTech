@@ -2,79 +2,12 @@
 'use strict';
 
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const http = require('node:http');
-const os = require('node:os');
-const path = require('node:path');
-const { spawn, spawnSync } = require('node:child_process');
-const WebSocket = require('ws');
-
-const appUrl = process.env.PITECH_URL || 'http://127.0.0.1:8787';
-const chrome = process.env.CHROME_PATH || (process.platform === 'win32'
-  ? path.join(process.env.PROGRAMFILES || 'C:\\Program Files', 'Google', 'Chrome', 'Application', 'chrome.exe')
-  : 'google-chrome');
-const port = 9800 + Math.floor(Math.random() * 300);
-const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'pitech-notepad-'));
-const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-function request(route, method = 'GET', parse = true) {
-  return new Promise((resolve, reject) => {
-    const req = http.request(`http://127.0.0.1:${port}${route}`, { method }, (res) => {
-      let body = '';
-      res.on('data', (chunk) => { body += chunk; });
-      res.on('end', () => {
-        if (!parse) return resolve(body);
-        try { resolve(JSON.parse(body)); } catch (error) { reject(error); }
-      });
-    });
-    req.on('error', reject);
-    req.end();
-  });
-}
+const { openBrowserHarness, wait } = require('./browser-harness.cjs');
 
 async function main() {
-  await new Promise((resolve, reject) => {
-    http.get(appUrl, (res) => { res.resume(); res.statusCode === 200 ? resolve() : reject(new Error(`PiTech returned ${res.statusCode}`)); }).on('error', reject);
-  });
-
-  const child = spawn(chrome, [
-    '--headless', '--disable-gpu', '--disable-extensions', '--disable-background-networking',
-    '--disable-crash-reporter', `--remote-debugging-port=${port}`,
-    `--user-data-dir=${profile}`, '--no-first-run', 'about:blank',
-  ], { stdio: 'ignore' });
-
-  let tab;
-  let socket;
+  const browser = await openBrowserHarness({ profilePrefix: 'pitech-notepad-', portStart: 9800, portEnd: 10100 });
+  const { send, evaluate, sentFrames, jsErrors } = browser;
   try {
-    for (let i = 0; i < 40; i++) {
-      try { await request('/json/version'); break; } catch { await wait(100); }
-    }
-    tab = await request(`/json/new?${encodeURIComponent(appUrl)}`, 'PUT');
-    socket = new WebSocket(tab.webSocketDebuggerUrl);
-    let id = 0;
-    const pending = new Map();
-    const sentFrames = [];
-    const jsErrors = [];
-    socket.on('message', (raw) => {
-      const message = JSON.parse(raw);
-      if (message.id && pending.has(message.id)) {
-        pending.get(message.id)(message);
-        pending.delete(message.id);
-      }
-      if (message.method === 'Network.webSocketFrameSent') sentFrames.push(message.params.response.payloadData);
-      if (message.method === 'Runtime.exceptionThrown') jsErrors.push(message.params.exceptionDetails.exception?.description || message.params.exceptionDetails.text);
-      if (message.method === 'Log.entryAdded' && message.params.entry.level === 'error') jsErrors.push(message.params.entry.text);
-    });
-    await new Promise((resolve) => socket.on('open', resolve));
-
-    const send = (method, params = {}) => new Promise((resolve) => {
-      const callId = ++id;
-      pending.set(callId, resolve);
-      socket.send(JSON.stringify({ id: callId, method, params }));
-    });
-    const evaluate = async (expression) => (await send('Runtime.evaluate', {
-      expression, awaitPromise: true, returnByValue: true,
-    })).result.result.value;
     const click = async (selector) => {
       const point = await evaluate(`(() => { const e = document.querySelector(${JSON.stringify(selector)}); if (!e) return null; const r = e.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
       assert.ok(point, `missing clickable element ${selector}`);
@@ -112,9 +45,17 @@ async function main() {
         button: !!button,
         immediatelyAfterNewProject: button?.previousElementSibling?.id === 'new-project-btn',
         panel: !!document.getElementById('notepad-panel'),
+        panelTag: document.getElementById('notepad-panel')?.tagName,
+        textareaLabel: document.getElementById('notepad-textarea')?.getAttribute('aria-label'),
       };
     })()`);
-    assert.deepEqual(initial, { button: true, immediatelyAfterNewProject: true, panel: true }, 'Notepad must be wired into the existing header/panel surface');
+    assert.deepEqual(initial, {
+      button: true,
+      immediatelyAfterNewProject: true,
+      panel: true,
+      panelTag: 'DIALOG',
+      textareaLabel: 'Notepad text',
+    }, 'Notepad must be wired into the existing header/panel surface');
 
     await click('#notepad-btn');
     await wait(250);
@@ -210,18 +151,9 @@ async function main() {
     assert.deepEqual(await evaluate(`[...document.querySelectorAll('.notepad-tab')].map((e) => e.textContent.trim())`), ['Note 1'], 'deleting the last tab must leave a fresh replacement tab');
     assert.equal(await evaluate(`document.getElementById('notepad-textarea').value`), '', 'the replacement tab must start empty');
     assert.deepEqual(jsErrors, [], `browser JavaScript errors:\n${jsErrors.join('\n')}`);
-    socket.close();
     console.log('PiTech notepad browser checks passed');
   } finally {
-    if (tab) await request(`/json/close/${tab.id}`, 'GET', false).catch(() => {});
-    if (process.platform === 'win32') {
-      const escaped = profile.replace(/'/g, "''");
-      spawnSync('powershell.exe', ['-NoProfile', '-Command', `Get-CimInstance Win32_Process -Filter "Name = 'chrome.exe'" | Where-Object { $_.CommandLine -like '*${escaped}*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`], { stdio: 'ignore' });
-    } else {
-      child.kill('SIGKILL');
-    }
-    await wait(500);
-    try { fs.rmSync(profile, { recursive: true, force: true }); } catch {}
+    await browser.close();
   }
 }
 

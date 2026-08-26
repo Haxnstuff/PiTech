@@ -6,10 +6,10 @@
 //  - writes ~/.pi/agent/webui-state.json so the web UI can show which skills
 //    are active in the current prompt.
 import { SessionManager, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { join } from "path";
-import { homedir } from "os";
-import { access, readFile, stat, unlink, writeFile } from "fs/promises";
-import { pathToFileURL } from "url";
+import { join } from "node:path";
+import { homedir } from "node:os";
+import { access, readFile, stat, unlink, writeFile } from "node:fs/promises";
+import { pathToFileURL } from "node:url";
 
 const AGENT = join(homedir(), ".pi", "agent");
 const STATE_FILE = join(AGENT, "webui-state.json");
@@ -51,32 +51,32 @@ async function projectLib(): Promise<any> {
   return import(`${pathToFileURL(LIB_FILE).href}?v=${version}`);
 }
 
-export default async function (pi: ExtensionAPI) {
+async function loadProjectContext(name: string, currentSessionFile?: string) {
+  const lib = await projectLib();
+  const projects = await lib.listProjects();
+  const project = projects.find((item: any) => item.name.toLowerCase() === name.toLowerCase());
+  if (!project) throw new Error(`Project "${name}" not found. Create it with /new-project ${name}`);
+
+  const sessionFiles = lib.otherProjectSessions(project.sessions, currentSessionFile);
+  const sessions = [];
+  for (const session of sessionFiles) {
+    try {
+      const manager = SessionManager.open(session.path);
+      sessions.push({ ...session, messages: manager.buildSessionContext().messages });
+    } catch {}
+  }
+
+  return {
+    name: project.name,
+    sessions,
+    context: lib.formatProjectContext(project.name, sessions),
+  };
+}
+
+export default async function registerPiWebui(pi: ExtensionAPI) {
   let activeProject = await readActiveProject();
   let projectContext = "";
   let projectSessionCount = 0;
-
-  async function loadProjectContext(name: string, currentSessionFile?: string) {
-    const lib = await projectLib();
-    const projects = await lib.listProjects();
-    const project = projects.find((item: any) => item.name.toLowerCase() === name.toLowerCase());
-    if (!project) throw new Error(`Project "${name}" not found. Create it with /new-project ${name}`);
-
-    const sessionFiles = lib.otherProjectSessions(project.sessions, currentSessionFile);
-    const sessions = [];
-    for (const session of sessionFiles) {
-      try {
-        const manager = SessionManager.open(session.path);
-        sessions.push({ ...session, messages: manager.buildSessionContext().messages });
-      } catch {}
-    }
-
-    return {
-      name: project.name,
-      sessions,
-      context: lib.formatProjectContext(project.name, sessions),
-    };
-  }
 
   async function activateProject(name: string, ctx: any) {
     const loaded = await loadProjectContext(name, ctx.sessionManager?.getSessionFile?.());
@@ -136,10 +136,10 @@ export default async function (pi: ExtensionAPI) {
           const { listProjects } = await projectLib();
           const projects = await listProjects();
           const available = projects.map((project: any) => project.name).join(", ") || "none";
-          await ctx.ui.notify(
-            `${activeProject ? `Active project: ${activeProject} (${projectSessionCount} other sessions). ` : "No active project. "}Available: ${available}`,
-            "info"
-          );
+          const projectStatus = activeProject
+            ? `Active project: ${activeProject} (${projectSessionCount} other sessions). `
+            : "No active project. ";
+          await ctx.ui.notify(`${projectStatus}Available: ${available}`, "info");
         } catch (error: any) {
           await ctx.ui.notify(`project failed: ${error?.message ?? error}`, "error");
         }
