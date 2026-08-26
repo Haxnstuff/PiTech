@@ -11,9 +11,11 @@ const read = (file) => fs.readFileSync(path.join(root, file), 'utf8');
 const pkg = JSON.parse(read('package.json'));
 assert.equal(pkg.name, 'pitech');
 assert.equal(pkg.author, 'Haxnstuff');
+assert.equal(pkg.version, '1.1.2');
 assert.equal(pkg.license, 'MIT');
 assert.equal(pkg.repository?.url, 'https://github.com/Haxnstuff/PiTech.git');
-assert.equal(pkg.scripts?.test, 'node tests/release.test.cjs');
+assert.equal(pkg.scripts?.test, 'node --test tests/clipboard.test.cjs tests/project-context.test.mjs && node tests/release.test.cjs');
+assert.equal(pkg.scripts?.['test:browser'], 'node tests/clipboard-browser.cjs');
 
 const ignored = read('.gitignore');
 for (const entry of ['node_modules/', 'config.json', 'server.log', 'public/vendor/', 'chrome-test-profile/']) {
@@ -44,6 +46,7 @@ for (const file of [
   'start-hidden.vbs',
   'public/index.html',
   'public/app.js',
+  'public/clipboard.js',
   'public/style.css',
   'pi/extensions/pi-webui.ts',
   'pi/scripts/projects.mjs',

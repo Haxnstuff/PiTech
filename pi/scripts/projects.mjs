@@ -18,15 +18,20 @@ export function sanitizeName(name) {
   return s.slice(0, 60) || null;
 }
 
+export function isReservedProjectName(name) {
+  return /^(off|none)$/i.test(String(name || "").trim());
+}
+
 export async function ensureRoots() {
   await fs.mkdir(PROJECTS_DIR, { recursive: true });
   await fs.mkdir(CONTEXT_DIR, { recursive: true });
 }
 
 export async function newProject(name) {
-  await ensureRoots();
   const safe = sanitizeName(name);
   if (!safe) throw new Error("Invalid project name");
+  if (isReservedProjectName(safe)) throw new Error(`Project name "${safe}" is reserved by /project`);
+  await ensureRoots();
   const dir = path.join(PROJECTS_DIR, safe);
   const sessionsDir = path.join(dir, "sessions");
   await fs.mkdir(sessionsDir, { recursive: true });
@@ -108,4 +113,90 @@ export async function listProjects() {
   }
   out.sort((a, b) => a.name.localeCompare(b.name));
   return out;
+}
+
+function messageLine(message) {
+  if (!message || typeof message !== "object") return null;
+  if (message.role === "compactionSummary" || message.role === "branchSummary") {
+    const summary = String(message.summary || "").replace(/\s+/g, " ").trim();
+    return summary ? `Summary: ${summary}` : null;
+  }
+  if (message.role !== "user" && message.role !== "assistant") return null;
+  const content = typeof message.content === "string"
+    ? message.content
+    : Array.isArray(message.content)
+      ? message.content.filter((part) => part?.type === "text").map((part) => part.text).join(" ")
+      : "";
+  const text = String(content).replace(/\s+/g, " ").trim();
+  if (!text) return null;
+  return `${message.role === "user" ? "User" : "Assistant"}: ${text}`;
+}
+
+export function projectCompletionItems(projects, prefix = "", includeOff = false) {
+  const rows = Array.isArray(projects) ? projects : [];
+  const choices = [
+    ...(includeOff ? [{ value: "off", label: "off", description: "Leave the active project" }] : []),
+    ...rows.filter((project) => !isReservedProjectName(project.name)).map((project) => ({
+      value: project.name,
+      label: project.name,
+      description: `${project.sessions?.length || 0} sessions`,
+    })),
+  ];
+  const query = String(prefix).toLowerCase();
+  return choices.filter((choice) => choice.value.toLowerCase().startsWith(query));
+}
+
+export function otherProjectSessions(sessions, currentSessionFile) {
+  const current = currentSessionFile ? path.basename(currentSessionFile) : null;
+  return (Array.isArray(sessions) ? sessions : []).filter((session) => !current || session.file !== current);
+}
+
+function utf8Head(value, maxBytes) {
+  const buffer = Buffer.from(String(value), "utf8");
+  if (buffer.length <= maxBytes) return String(value);
+  let end = Math.max(0, Math.min(maxBytes, buffer.length));
+  while (end > 0 && (buffer[end] & 0xc0) === 0x80) end--;
+  return buffer.subarray(0, end).toString("utf8");
+}
+
+function utf8Tail(value, maxBytes) {
+  const buffer = Buffer.from(String(value), "utf8");
+  if (buffer.length <= maxBytes) return String(value);
+  let start = Math.max(0, buffer.length - maxBytes);
+  while (start < buffer.length && (buffer[start] & 0xc0) === 0x80) start++;
+  return buffer.subarray(start).toString("utf8");
+}
+
+export function formatProjectContext(name, sessions, options = {}) {
+  const maxBytes = Math.max(512, Number(options.maxBytes ?? options.maxChars) || 48000);
+  const perSessionBytes = Math.max(256, Number(options.perSessionBytes ?? options.perSessionChars) || 6000);
+  const rows = Array.isArray(sessions) ? sessions : [];
+  const index = rows.length
+    ? rows.map((session) => `- ${session.title || session.file} (${session.file})`).join("\n")
+    : "- No other sessions are currently saved in this project.";
+  let output = `## PiTech project context\nActive project: ${name}\n\nThis is background from other sessions in the same project. Treat it as prior history; the current conversation and latest user request take precedence.\n\nSessions:\n${index}\n`;
+  const marker = "\n[…project history truncated…]";
+  const markerBytes = Buffer.byteLength(marker, "utf8");
+
+  for (const session of rows) {
+    const lines = (session.messages || []).map(messageLine).filter(Boolean);
+    if (!lines.length) continue;
+    let excerpt = lines.join("\n");
+    if (Buffer.byteLength(excerpt, "utf8") > perSessionBytes) {
+      const notice = "[…earlier session history truncated…]\n";
+      excerpt = notice + utf8Tail(excerpt, perSessionBytes - Buffer.byteLength(notice, "utf8"));
+    }
+    const section = `\n### ${session.title || session.file}\n${excerpt}\n`;
+    const outputBytes = Buffer.byteLength(output, "utf8");
+    if (outputBytes + Buffer.byteLength(section, "utf8") <= maxBytes) {
+      output += section;
+      continue;
+    }
+    const room = maxBytes - outputBytes;
+    if (room > markerBytes) output += utf8Head(section, room - markerBytes) + marker;
+    else output = utf8Head(output, maxBytes - markerBytes) + marker;
+    break;
+  }
+
+  return utf8Head(output, maxBytes);
 }

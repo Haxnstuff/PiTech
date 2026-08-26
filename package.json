@@ -1,6 +1,6 @@
 {
   "name": "pitech",
-  "version": "1.0.0",
+  "version": "1.1.2",
   "private": true,
   "description": "PiTech — a local browser UI for the real pi coding agent",
   "author": "Haxnstuff",
@@ -16,7 +16,8 @@
   "scripts": {
     "start": "node server.js",
     "setup": "node setup.js",
-    "test": "node tests/release.test.cjs"
+    "test": "node --test tests/clipboard.test.cjs tests/project-context.test.mjs && node tests/release.test.cjs",
+    "test:browser": "node tests/clipboard-browser.cjs"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.10.0",

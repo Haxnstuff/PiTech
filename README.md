@@ -37,7 +37,9 @@ Restart pi or run `/reload` after the first installation so pi loads the PiTech 
 - MCP and skill management
 - Provider and API-key login controls
 - Persistent pinning for projects, conversations, skills, and MCP servers
-- Context-aware custom right-click menus
+- Chrome and Firefox clipboard copy with native permission fallback
+- PowerShell-style terminal right-click paste with clipboard-permission fallback
+- Context-aware custom right-click menus (`Shift+right-click` opens terminal actions)
 - Slate, Catppuccin Mocha, Nord, Tokyo Night, Dracula, Cyberpunk, TornTech, and Custom themes
 - Conditional pi and extension update controls
 
@@ -53,6 +55,8 @@ The extension provides:
 ```text
 /new-project <name>    Create a project folder
 /add-project <name>    Copy the current session into a project
+/project <name>        Enter a project with its other sessions in context
+/project off           Leave the active project
 ```
 
 It also updates `~/.pi/agent/webui-state.json` so the skills sidebar can show which skills are active in the current prompt.
@@ -94,6 +98,18 @@ Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*PiTech*ser
 1. Remove `pi WebUI.lnk` from `shell:startup`.
 2. Delete `$HOME\PiTech`.
 3. Optionally delete `~/.pi/agent/extensions/pi-webui.ts` and `~/.pi/agent/scripts/projects.mjs`.
+
+## Firefox clipboard setup
+
+If Firefox does not allow clipboard copy or paste, enable its asynchronous clipboard preferences:
+
+1. Open Firefox and enter `about:config` in the address bar.
+2. Accept the warning.
+3. Search for `dom.events.asyncClipboard.clipboardItem` and set it to `true`.
+4. Search for `dom.events.asyncClipboard.readText` and set it to `true`.
+5. Reload PiTech at `http://127.0.0.1:8787`.
+
+If either preference does not exist, create a Boolean preference with the exact name and set it to `true`.
 
 ## Attribution and license
 

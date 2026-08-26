@@ -462,7 +462,7 @@ async function getState() {
     skillRoots: [path.join(AGENT, 'skills'), path.join(os.homedir(), '.agents', 'skills')],
     updates: updateCache.data,
     updateRunning,
-    appVersion: 5,
+    appVersion: 8,
     stateTs: Date.now(),
   };
 }
