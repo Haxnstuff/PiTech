@@ -12,6 +12,10 @@
   const ctxList = $('ctx-list');
   const projList = $('projects-list');
   const convList = $('conv-list');
+  const fileTree = $('file-tree');
+  const fileRootSelect = $('file-root-select');
+  const fileRootName = $('file-root-name');
+  const skillsPanel = $('skills-panel');
   const skillsList = $('skills-list');
   const skillCount = $('skill-count');
   const skillSearch = $('skill-search');
@@ -38,7 +42,7 @@
   let state = null;
   let lastSig = '';
   let hashHandled = false;
-  const APP_VERSION = 10;
+  const APP_VERSION = 13;
   function showVersionBanner() {
     const b = $('version-banner');
     if (!b || !b.classList.contains('hidden')) return;
@@ -49,8 +53,16 @@
   const openGroups = new Set();
   const openProjects = new Set();
   const openSkillGroups = new Set();
+  const openTreeDirs = new Set();
   let skillQuery = '';
   let skillActiveOnly = false;
+  let treeRoot = null;
+  let treeRootId = null;
+  let selectedFileRoot = null;
+  const selectedKeys = new Set();
+  let selectedKind = null;
+  let selectionAnchor = null;
+  let nativeSpellcheckTarget = null;
 
   const NOTEPAD_KEY = 'pi-notepads';
   let notepadSaveWarned = false;
@@ -431,6 +443,97 @@
     if (w >= 180 && w <= 480) el.style.width = w + 'px';
   }
 
+  function clearSelection() {
+    selectedKeys.clear();
+    selectedKind = null;
+    selectionAnchor = null;
+    applySelection();
+  }
+
+  function rowsForSelection(kind, origin) {
+    if (kind === 'session') {
+      return [...convList.querySelectorAll('.session-row[data-select-kind="session"]')]
+        .filter((row) => row.offsetParent !== null);
+    }
+    const list = origin?.closest('ul') || fileTree;
+    return [...list.querySelectorAll(':scope > .tree-item > .tree-row[data-select-kind="file"]')]
+      .filter((row) => row.offsetParent !== null);
+  }
+
+  function applySelection() {
+    for (const row of document.querySelectorAll('[data-select-kind][data-select-key]')) {
+      const selected = row.dataset.selectKind === selectedKind && selectedKeys.has(row.dataset.selectKey);
+      row.classList.toggle('selected', selected);
+      row.setAttribute('aria-selected', selected ? 'true' : 'false');
+    }
+  }
+
+  function selectRow(row, event, open) {
+    const kind = row.dataset.selectKind;
+    const key = row.dataset.selectKey;
+    if (!kind || !key || (!event.ctrlKey && !event.metaKey && !event.shiftKey)) {
+      clearSelection();
+      open();
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    if (selectedKind !== kind) {
+      selectedKeys.clear();
+      selectedKind = kind;
+      selectionAnchor = null;
+    }
+    if (event.shiftKey) {
+      const rows = rowsForSelection(kind, row);
+      const anchor = selectionAnchor && rows.some((item) => item.dataset.selectKey === selectionAnchor)
+        ? selectionAnchor : key;
+      const start = rows.findIndex((item) => item.dataset.selectKey === anchor);
+      const end = rows.findIndex((item) => item === row);
+      if (start < 0 || end < 0) selectedKeys.add(key);
+      else for (const item of rows.slice(Math.min(start, end), Math.max(start, end) + 1)) selectedKeys.add(item.dataset.selectKey);
+      selectionAnchor = anchor;
+    } else {
+      if (selectedKeys.has(key)) selectedKeys.delete(key); else selectedKeys.add(key);
+      selectionAnchor = key;
+    }
+    if (!selectedKeys.size) {
+      selectedKind = null;
+      selectionAnchor = null;
+    }
+    applySelection();
+  }
+
+  function prepareContextSelection(target) {
+    const row = target instanceof Element ? target.closest('[data-select-kind][data-select-key]') : null;
+    if (!row) return;
+    const kind = row.dataset.selectKind;
+    const key = row.dataset.selectKey;
+    if (selectedKind === kind && selectedKeys.has(key)) return;
+    selectedKeys.clear();
+    selectedKind = kind;
+    selectionAnchor = key;
+    selectedKeys.add(key);
+    applySelection();
+  }
+
+  function selectedEntriesFor(ctx) {
+    if (!ctx.selectKind || selectedKind !== ctx.selectKind) return [];
+    const seen = new Set();
+    const entries = [];
+    for (const row of document.querySelectorAll('[data-select-kind][data-select-key]')) {
+      const key = row.dataset.selectKey;
+      if (row.dataset.selectKind !== ctx.selectKind || !selectedKeys.has(key) || seen.has(key)) continue;
+      seen.add(key);
+      entries.push({
+        key,
+        path: row.dataset.path || key,
+        name: row.dataset.name || key,
+        type: row.dataset.fileType || '',
+      });
+    }
+    return entries;
+  }
+
   // ---------------- state ----------------
   async function fetchState() {
     try {
@@ -449,9 +552,14 @@
     if (!state) return;
     const sig = JSON.stringify({
       p: state.projects.map((x) => [x.name, x.sessions.length, x.sessions.map((s) => [s.file, s.mtime, s.title])]),
-      c: state.conversations.map((g) => [g.dir, g.total, g.sessions.map((s) => [s.file, s.mtime, s.title])]),
+      c: [
+        ...(state.conversationFolders || []).map((folder) => [folder.name, folder.total]),
+        ...(state.conversations || []).map((s) => [s.path, s.mtime, s.title, s.folder, s.pinned]),
+      ],
       x: state.context.map((f) => [f.file, f.mtime]),
       sk: state.skills.map((s) => [s.name, s.label, s.active, s.disabled]),
+      fr: [state.fileRootId, ...(state.fileRoots || []).map((root) => [root.id, root.path])],
+      e: state.editing,
       u: state.updates,
       ur: state.updateRunning,
     });
@@ -463,7 +571,10 @@
     renderProjects();
     renderConversations();
     renderSkills();
+    if (!selectedFileRoot || !(state.fileRoots || []).some((root) => root.id === selectedFileRoot)) renderFileTree();
+    else updateTreeActivity();
     renderUpdates();
+    applySelection();
     convList.scrollTop = convScroll;
     skillsList.scrollTop = skillScroll;
   }
@@ -599,52 +710,89 @@
     }
   }
 
-  // past conversations (drag sources)
+  // Past Sessions stays flat for Pi; folders are lightweight display metadata.
   function renderConversations() {
     convList.innerHTML = '';
-    if (!state.conversations.length) {
+    const sessions = Array.isArray(state?.conversations) ? state.conversations : [];
+    const folders = Array.isArray(state?.conversationFolders) ? state.conversationFolders : [];
+    $('conv-count').textContent = sessions.length ? sessions.length : '';
+    if (!sessions.length && !folders.length) {
       convList.innerHTML = '<div class="empty-note">no past conversations yet</div>';
       return;
     }
-    for (const g of state.conversations) {
-      const li = document.createElement('li');
-      li.className = 'conv-group' + (openGroups.has(g.dir) ? ' open' : '') + (pinsOf('conversations').includes(g.dir) ? ' pinned' : '');
-      li.innerHTML = `<div class="g-label-row" data-ctx="convgroup" data-name="${esc(g.dir)}" data-path="${esc(g.path)}" title="${esc(g.label)}"><span class="g-caret">▶</span><span class="g-label">${esc(g.label)}</span><span class="g-count">${g.total}</span></div>`;
-      const ul = document.createElement('ul');
-      ul.className = 'conv-sessions';
-      for (const s of g.sessions) {
-        const srow = document.createElement('li');
-        srow.className = 'session-row';
-        srow.draggable = true;
-        srow.title = s.path;
-        srow.dataset.ctx = 'session';
-        srow.dataset.path = s.path;
-        srow.dataset.name = s.file;
-        srow.innerHTML = `<span class="s-time">${fmtTime(s.mtime)}</span><span class="s-snippet">${esc(s.title || s.file)}</span>`;
-        srow.addEventListener('dragstart', (e) => {
-          e.dataTransfer.setData('text/plain', JSON.stringify({ src: s.path }));
-          e.dataTransfer.effectAllowed = 'copy';
-        });
-        srow.addEventListener('click', () => loadSession(s.path, s.title));
-        ul.appendChild(srow);
-      }
-      const header = li.querySelector('.g-label-row');
-      header.title = g.label + ' — click to expand · drag to copy all into a project';
-      header.draggable = true;
-      header.addEventListener('dragstart', (e) => {
-        e.dataTransfer.setData('text/plain', JSON.stringify({ src: g.path }));
-        e.dataTransfer.effectAllowed = 'copy';
+
+    const addSession = (parent, session) => {
+      const row = document.createElement('li');
+      row.className = 'session-row' + (session.pinned ? ' pinned' : '');
+      row.draggable = true;
+      row.title = session.path + (session.folder ? ` · ${session.folder}` : '');
+      row.dataset.ctx = 'session';
+      row.dataset.path = session.path;
+      row.dataset.name = session.title || session.file;
+      row.dataset.selectKind = 'session';
+      row.dataset.selectKey = session.path;
+      row.innerHTML = `<span class="s-time">${fmtTime(session.mtime)}</span><span class="s-snippet">${esc(session.title || session.file)}</span>`;
+      row.addEventListener('dragstart', (e) => {
+        e.dataTransfer.setData('text/plain', JSON.stringify({ src: session.path }));
+        e.dataTransfer.effectAllowed = 'move';
       });
+      row.addEventListener('click', (event) => selectRow(row, event, () => loadSession(session.path, session.title)));
+      parent.appendChild(row);
+    };
+
+    const pinned = sessions.filter((session) => session.pinned);
+    if (pinned.length) {
+      const label = document.createElement('li');
+      label.className = 'conv-subhead';
+      label.textContent = 'Pinned';
+      convList.appendChild(label);
+      for (const session of pinned) addSession(convList, session);
+    }
+
+    for (const folder of folders) {
+      const folderSessions = sessions.filter((session) => session.folder === folder.name);
+      const li = document.createElement('li');
+      const key = 'folder:' + folder.name;
+      li.className = 'conv-group conv-folder' + (openGroups.has(key) ? ' open' : '');
+      const header = document.createElement('div');
+      header.className = 'g-label-row';
+      header.dataset.ctx = 'convfolder';
+      header.dataset.name = folder.name;
+      header.title = 'Click to expand · drop conversations here';
+      header.innerHTML = `<span class="g-caret">▶</span><span class="g-label">${esc(folder.name)}</span><span class="g-count">${folderSessions.length}</span>`;
+      const list = document.createElement('ul');
+      list.className = 'conv-sessions';
+      if (!folderSessions.length) list.innerHTML = '<li class="empty-note">empty folder</li>';
+      else for (const session of folderSessions) addSession(list, session);
       header.addEventListener('click', () => {
-        if (openGroups.has(g.dir)) openGroups.delete(g.dir); else openGroups.add(g.dir);
+        if (openGroups.has(key)) openGroups.delete(key); else openGroups.add(key);
         li.classList.toggle('open');
       });
-      li.appendChild(ul);
+      li.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        li.classList.add('drag-over');
+      });
+      li.addEventListener('dragleave', () => li.classList.remove('drag-over'));
+      li.addEventListener('drop', async (e) => {
+        e.preventDefault();
+        li.classList.remove('drag-over');
+        let src;
+        try { src = JSON.parse(e.dataTransfer.getData('text/plain')).src; } catch { return; }
+        const result = await apiPost('/api/conversations/organize', { path: src, folder: folder.name });
+        showToast(result.ok ? `Moved to "${folder.name}"` : 'Move failed: ' + (result.error || 'unknown'));
+        if (result.ok) fetchState();
+      });
+      li.appendChild(header);
+      li.appendChild(list);
       convList.appendChild(li);
     }
+
+    const unfiled = sessions.filter((session) => !session.folder);
+    for (const session of unfiled) addSession(convList, session);
   }
 
-  // skills (green = active in current prompt; search + active-only filter;
+  // skills (green = used in current prompt; search + active-only filter;
   // groups are accordions — expanded rows appear below the group header)
   function renderSkills() {
     const q = skillQuery.trim().toLowerCase();
@@ -654,7 +802,8 @@
       if (q && !s.name.toLowerCase().includes(q)) return false;
       return true;
     });
-    skillCount.textContent = `${items.length}/${state.skills.length} skills`;
+    const used = state.skills.filter((skill) => skill.active).length;
+    skillCount.textContent = `${used}/${state.skills.length} used`;
     skillsList.innerHTML = '';
     if (!items.length) {
       skillsList.innerHTML = '<div class="empty-note">no matching skills</div>';
@@ -699,6 +848,138 @@
 
   skillSearch.addEventListener('input', () => { skillQuery = skillSearch.value; renderSkills(); });
   skillFilter.addEventListener('change', () => { skillActiveOnly = skillFilter.checked; renderSkills(); });
+
+  // ---------------- file tree ----------------
+  function normalizedTreePath(value) {
+    return String(value || '').replace(/\\/g, '/').toLowerCase();
+  }
+
+  function updateTreeActivity() {
+    const editing = new Map();
+    for (const item of state?.editing || []) {
+      const key = normalizedTreePath(item.path);
+      if (!editing.has(key)) editing.set(key, new Set());
+      editing.get(key).add(item.who);
+    }
+    for (const row of fileTree.querySelectorAll('.tree-row[data-path]')) {
+      const marker = row.querySelector('.tree-activity');
+      marker.replaceChildren();
+      for (const who of ['pi', 'sub']) {
+        if (!editing.get(normalizedTreePath(row.dataset.path))?.has(who)) continue;
+        const dot = document.createElement('span');
+        dot.className = `edit-dot ${who}`;
+        dot.title = who === 'pi' ? 'Pi is editing this file' : 'A subagent is editing this file';
+        marker.appendChild(dot);
+      }
+    }
+  }
+
+  async function loadTreeDir(dir, host) {
+    host.innerHTML = '<li class="empty-note">loading…</li>';
+    try {
+      const r = await fetch('/api/tree?root=' + encodeURIComponent(treeRootId || 'agent') + '&path=' + encodeURIComponent(dir));
+      const data = await r.json();
+      if (!r.ok || !data.ok) throw new Error(data.error || 'failed to load folder');
+      host.innerHTML = '';
+      if (!data.entries.length) host.innerHTML = '<li class="empty-note">empty folder</li>';
+      for (const entry of data.entries) {
+        const item = document.createElement('li');
+        item.className = 'tree-item';
+        const row = document.createElement('div');
+        row.className = `tree-row ${entry.type}`;
+        row.dataset.ctx = 'file';
+        row.dataset.path = entry.path;
+        row.dataset.name = entry.name;
+        row.dataset.fileType = entry.type;
+        row.dataset.selectKind = 'file';
+        row.dataset.selectKey = entry.path;
+        row.title = entry.path;
+        row.innerHTML = `<span class="g-caret">${entry.type === 'directory' ? '▶' : ''}</span><span class="tree-name">${esc(entry.name)}</span><span class="tree-activity"></span>`;
+        item.appendChild(row);
+        if (entry.type === 'directory') {
+          const children = document.createElement('ul');
+          children.className = 'tree-children';
+          item.appendChild(children);
+          if (openTreeDirs.has(entry.path)) {
+            item.classList.add('open');
+            children.dataset.loaded = '1';
+            loadTreeDir(entry.path, children);
+          }
+          row.addEventListener('click', (event) => {
+            if (event.ctrlKey || event.metaKey || event.shiftKey) {
+              selectRow(row, event, () => {});
+              return;
+            }
+            clearSelection();
+            item.classList.toggle('open');
+            if (item.classList.contains('open')) openTreeDirs.add(entry.path); else openTreeDirs.delete(entry.path);
+            if (item.classList.contains('open') && !children.dataset.loaded) {
+              children.dataset.loaded = '1';
+              loadTreeDir(entry.path, children);
+            }
+          });
+        } else {
+          row.addEventListener('click', (event) => selectRow(row, event, () => loadFile(entry.path, entry.name)));
+        }
+        host.appendChild(item);
+      }
+      updateTreeActivity();
+      applySelection();
+    } catch (error) {
+      host.innerHTML = `<li class="empty-note">${esc(error.message || 'failed to load files')}</li>`;
+    }
+  }
+
+  function renderFileTree() {
+    const roots = Array.isArray(state?.fileRoots) ? state.fileRoots : [];
+    const previousRoot = selectedFileRoot;
+    const available = roots.find((root) => root.id === selectedFileRoot);
+    const selected = available || roots.find((root) => root.id === state.fileRootId) || roots[0];
+    selectedFileRoot = selected?.id || null;
+    if (previousRoot && previousRoot !== selectedFileRoot) openTreeDirs.clear();
+    treeRootId = selectedFileRoot;
+    treeRoot = selected?.path || null;
+    fileRootSelect.innerHTML = '';
+    for (const root of roots) {
+      const option = document.createElement('option');
+      option.value = root.id;
+      option.textContent = root.label;
+      option.title = root.hint || root.path || root.label;
+      fileRootSelect.appendChild(option);
+    }
+    fileRootSelect.value = selectedFileRoot || '';
+    fileRootSelect.disabled = roots.length < 2;
+    fileRootName.textContent = selected?.label || '';
+    fileRootName.title = selected?.hint || selected?.path || '';
+    fileTree.innerHTML = '';
+    if (!treeRoot) {
+      fileTree.innerHTML = '<li class="empty-note">no Pi roots available</li>';
+      return;
+    }
+    loadTreeDir(treeRoot, fileTree);
+  }
+
+  fileRootSelect.addEventListener('change', () => {
+    selectedFileRoot = fileRootSelect.value || null;
+    openTreeDirs.clear();
+    renderFileTree();
+  });
+
+  // ---------------- Skills floating panel ----------------
+  const applySkillsSaved = makePanelMoveable(skillsPanel, 'skills-head', 'skills-resize', 'pi-skills-panel');
+  function openSkills() {
+    applySkillsSaved();
+    if (state) renderSkills();
+    skillsPanel.classList.remove('hidden');
+  }
+  function closeSkills() { skillsPanel.classList.add('hidden'); }
+  $('skills-btn').addEventListener('click', () => {
+    if (skillsPanel.classList.contains('hidden')) openSkills(); else closeSkills();
+  });
+  $('skills-close').addEventListener('click', closeSkills);
+  document.addEventListener('click', (e) => {
+    if (!skillsPanel.classList.contains('hidden') && !skillsPanel.contains(e.target) && e.target.id !== 'skills-btn' && !e.target.closest('#ctx-menu')) closeSkills();
+  });
 
   // ---------------- MCP floating panel ----------------
   const applyMcpSaved = makePanelMoveable($('mcp-panel'), 'mcp-head', 'mcp-resize', 'pi-mcp-panel');
@@ -750,6 +1031,7 @@
     if (!mcpPanel.classList.contains('hidden') && !mcpPanel.contains(e.target) && e.target.id !== 'mcp-btn' && !e.target.closest('#ctx-menu')) closeMcp();
   });
   document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !skillsPanel.classList.contains('hidden')) closeSkills();
     if (e.key === 'Escape' && !mcpPanel.classList.contains('hidden')) closeMcp();
     if (e.key === 'Escape' && !sessPanel.classList.contains('hidden')) closeSessionPanel();
     if (e.key === 'Escape' && !notepadPanel.classList.contains('hidden')) closeNotepad();
@@ -1007,7 +1289,7 @@
 
   // ---------------- settings panel ----------------
   const settingsPanel = $('settings-panel');
-  const KNOWN_PROVIDERS = ['openai', 'anthropic', 'deepseek', 'google', 'xai', 'groq', 'mistral', 'ollama', 'huggingface'];
+  const KNOWN_PROVIDERS = ['openai', 'anthropic', 'deepseek', 'google', 'xai', 'groq', 'mistral', 'ollama', 'huggingface', 'openrouter'];
 
   function openSettings() {
     applySettingsSaved();
@@ -1243,8 +1525,11 @@
       case 'input': return 'text field';
       case 'generic': return 'workspace';
       case 'session': case 'psession': return 'conversation';
-      case 'convgroup': return 'conversation folder';
+      case 'convfolder': return 'conversation folder';
+      case 'convhead': return 'past sessions';
+      case 'filehead': return 'files';
       case 'project': return 'project · ' + ctx.name;
+      case 'file': return 'file · ' + ctx.name;
       case 'ctxfile': return 'context file · ' + ctx.name;
       case 'skill': return 'skill · ' + ctx.name;
       case 'mcprow': return 'MCP server · ' + ctx.name;
@@ -1313,6 +1598,131 @@
     setTimeout(() => { $('prompt-input').focus(); $('prompt-input').select(); }, 30);
   }
 
+  function renameDelta(oldValue, newValue) {
+    let start = 0;
+    while (start < oldValue.length && start < newValue.length && oldValue[start] === newValue[start]) start++;
+    let oldEnd = oldValue.length;
+    let newEnd = newValue.length;
+    while (oldEnd > start && newEnd > start && oldValue[oldEnd - 1] === newValue[newEnd - 1]) {
+      oldEnd--;
+      newEnd--;
+    }
+    return { start, end: oldEnd, text: newValue.slice(start, newEnd) };
+  }
+
+  async function applyBulk(entries, endpoint, bodyFor, message) {
+    let failed = 0;
+    for (const entry of entries) {
+      const result = await apiPost(endpoint, bodyFor(entry));
+      if (!result.ok) failed++;
+    }
+    showToast(failed ? `${entries.length - failed} ${message}; ${failed} failed` : `${entries.length} ${message}`);
+    clearSelection();
+    fetchState();
+  }
+
+  function openBulkRename(entries, kind) {
+    const modal = $('bulk-rename-modal');
+    const list = $('bulk-rename-list');
+    const fields = [];
+    let values = [];
+    let applying = false;
+    list.replaceChildren();
+    for (const entry of entries) {
+      const label = document.createElement('label');
+      label.className = 'bulk-rename-row';
+      const caption = document.createElement('span');
+      caption.textContent = entry.name;
+      const input = document.createElement('input');
+      input.value = entry.name;
+      input.autocomplete = 'off';
+      input.spellcheck = false;
+      label.append(caption, input);
+      list.appendChild(label);
+      fields.push(input);
+    }
+    values = fields.map((input) => input.value);
+    const syncCaret = (position) => {
+      for (const input of fields) {
+        const caret = Math.min(Math.max(0, position), input.value.length);
+        input.setSelectionRange(caret, caret);
+      }
+    };
+    fields.forEach((input, index) => {
+      const followCaret = () => syncCaret(input.selectionStart ?? input.value.length);
+      input.addEventListener('focus', followCaret);
+      input.addEventListener('click', followCaret);
+      input.addEventListener('select', followCaret);
+      input.addEventListener('keyup', followCaret);
+      input.addEventListener('input', () => {
+        if (applying) return;
+        const delta = renameDelta(values[index], input.value);
+        const nextValues = values.map((value, itemIndex) => itemIndex === index
+          ? input.value
+          : value.slice(0, Math.min(delta.start, value.length))
+            + delta.text
+            + value.slice(Math.min(delta.end, value.length)));
+        applying = true;
+        fields.forEach((field, itemIndex) => { field.value = nextValues[itemIndex]; });
+        applying = false;
+        values = nextValues;
+        syncCaret(delta.start + delta.text.length);
+      });
+    });
+    $('bulk-rename-sub').textContent = `${entries.length} ${kind === 'session' ? 'sessions' : 'files'} · edit any row; the caret stays aligned`;
+    modal.classList.remove('hidden');
+    const close = () => {
+      modal.classList.add('hidden');
+      list.replaceChildren();
+      clearSelection();
+    };
+    $('bulk-rename-cancel').onclick = close;
+    $('bulk-rename-ok').onclick = async () => {
+      const button = $('bulk-rename-ok');
+      button.disabled = true;
+      let failed = 0;
+      for (let i = 0; i < entries.length; i++) {
+        const name = fields[i].value.trim();
+        if (!name) { failed++; continue; }
+        const result = kind === 'session'
+          ? await apiPost('/api/conversations/organize', { path: entries[i].path, title: name })
+          : await apiPost('/api/fs/rename', { path: entries[i].path, name });
+        if (!result.ok) failed++;
+      }
+      if (failed) {
+        button.disabled = false;
+        showToast(`${entries.length - failed} renamed; ${failed} failed`);
+        return;
+      }
+      close();
+      showToast(`${entries.length} renamed`);
+      fetchState();
+    };
+    setTimeout(() => { fields[0]?.focus(); syncCaret(fields[0]?.value.length || 0); }, 30);
+  }
+
+  function wordAtInput(input) {
+    const value = input.value || '';
+    let start = input.selectionStart ?? 0;
+    let end = input.selectionEnd ?? start;
+    if (start === end) {
+      if (start === value.length) start--;
+      if (start < 0 || !/[A-Za-z0-9_'-]/.test(value[start])) return '';
+      end = start + 1;
+      while (start > 0 && /[A-Za-z0-9_'-]/.test(value[start - 1])) start--;
+      while (end < value.length && /[A-Za-z0-9_'-]/.test(value[end])) end++;
+    }
+    const word = value.slice(start, end);
+    return /^[A-Za-z0-9_'-]+$/.test(word) ? word : '';
+  }
+
+  function armNativeSpellcheck(input) {
+    input.spellcheck = true;
+    nativeSpellcheckTarget = input;
+    input.focus();
+    showToast('Spellcheck armed — right-click again for browser suggestions');
+  }
+
   function togglePin(list, name, pin) {
     apiPost('/api/pin', { list, name, pin }).then(async () => {
       await fetchState();
@@ -1358,6 +1768,7 @@
       } });
       items.push({ label: 'Paste', run: doPaste });
       items.push({ label: 'Paste without formatting', run: doPaste });
+      if (ctx.word && inp.spellcheck) items.push({ label: 'Spellcheck', run: () => armNativeSpellcheck(inp) });
       items.push('sep');
       items.push({ label: 'Select All', run: () => { inp.focus(); inp.select(); } });
       return items;
@@ -1373,23 +1784,56 @@
       items.push({ label: 'Delete Tab', danger: true, run: () => deleteNotepad(ctx.id) });
       return items;
     }
-    const pinned = pinsOf(ctx.list).includes(ctx.name);
+    const selected = selectedEntriesFor(ctx);
+    if (selected.length > 1 && ctx.selectKind === 'session') {
+      items.push({ label: 'Rename selected', run: () => openBulkRename(selected, 'session') });
+      const folders = (state?.conversationFolders || []).map((folder) => ({
+        label: folder.name,
+        run: () => applyBulk(selected, '/api/conversations/organize', (entry) => ({ path: entry.path, folder: folder.name }), `moved to "${folder.name}"`),
+      }));
+      folders.unshift({
+        label: 'Unfiled',
+        run: () => applyBulk(selected, '/api/conversations/organize', (entry) => ({ path: entry.path, folder: null }), 'unfiled'),
+      });
+      items.push({ label: 'Move selected to folder', sub: folders });
+      const pin = !selected.every((entry) => pinsOf('conversations').includes(entry.key));
+      items.push({ label: pin ? 'Pin selected' : 'Unpin selected', run: () => applyBulk(selected, '/api/pin', (entry) => ({ list: 'conversations', name: entry.key, pin }), pin ? 'pinned' : 'unpinned') });
+      items.push({ label: 'Clear selection', run: clearSelection });
+      return items;
+    }
+    if (selected.length > 1 && ctx.selectKind === 'file') {
+      items.push({ label: 'Rename selected', run: () => openBulkRename(selected, 'file') });
+      items.push({ label: 'Copy paths', run: () => copyText(selected.map((entry) => entry.path).join('\\n')) });
+      items.push({ label: 'Clear selection', run: clearSelection });
+      return items;
+    }
+    const pinKey = ctx.kind === 'session' ? ctx.path : ctx.name;
+    const pinned = !!ctx.list && pinsOf(ctx.list).includes(pinKey);
     if (ctx.list) {
-      items.push({ label: pinned ? 'Unpin' : 'Pin', run: () => togglePin(ctx.list, ctx.name, !pinned) });
+      items.push({ label: pinned ? 'Unpin' : 'Pin', run: () => togglePin(ctx.list, pinKey, !pinned) });
     }
     if (ctx.kind === 'session' || ctx.kind === 'psession') {
       items.push({ label: 'Open', run: () => loadSession(ctx.path, ctx.name) });
+      if (ctx.kind === 'session') {
+        items.push({ label: 'Rename', run: () => promptModal('Rename conversation', ctx.name, (title) => apiPost('/api/conversations/organize', { path: ctx.path, title }).then((j) => { showToast(j.ok ? 'Conversation renamed' : 'Rename failed: ' + (j.error || '')); if (j.ok) fetchState(); })) });
+        const folders = (state?.conversationFolders || []).map((folder) => ({
+          label: folder.name,
+          run: () => apiPost('/api/conversations/organize', { path: ctx.path, folder: folder.name }).then((j) => { showToast(j.ok ? `Moved to "${folder.name}"` : 'Move failed: ' + (j.error || '')); if (j.ok) fetchState(); }),
+        }));
+        folders.unshift({
+          label: 'Unfiled',
+          run: () => apiPost('/api/conversations/organize', { path: ctx.path, folder: null }).then((j) => { showToast(j.ok ? 'Conversation unfiled' : 'Move failed: ' + (j.error || '')); if (j.ok) fetchState(); }),
+        });
+        items.push({ label: 'Move to folder', sub: folders });
+      }
       items.push({ label: 'Copy', run: () => copyText(ctx.path) });
       items.push({ label: 'Copy link', run: () => copyText(linkFor('session', ctx.path)) });
       items.push({ label: 'Show in Explorer', run: () => apiPost('/api/open', { path: ctx.path, mode: 'explorer' }) });
       items.push('sep');
       items.push({ label: 'Delete', danger: true, run: () => confirmDelete(ctx) });
-    } else if (ctx.kind === 'convgroup') {
-      items.push({ label: 'Copy', run: () => copyText(ctx.path) });
-      items.push({ label: 'Copy link', run: () => copyText(linkFor('conv', ctx.name)) });
-      items.push({ label: 'Show in Explorer', run: () => apiPost('/api/open', { path: ctx.path, mode: 'explorer' }) });
-      items.push('sep');
-      items.push({ label: 'Delete group', danger: true, run: () => confirmDelete(ctx) });
+    } else if (ctx.kind === 'convfolder') {
+      items.push({ label: 'Rename', run: () => promptModal('Rename conversation folder', ctx.name, (name) => apiPost('/api/conversations/folders', { action: 'rename', oldName: ctx.name, newName: name }).then((j) => { showToast(j.ok ? 'Folder renamed' : 'Rename failed: ' + (j.error || '')); if (j.ok) fetchState(); })) });
+      items.push({ label: 'Delete folder', danger: true, run: () => confirmModal('Delete folder "' + ctx.name + '"?', 'Conversations stay safe and become unfiled.', 'Delete folder', () => apiPost('/api/conversations/folders', { action: 'delete', name: ctx.name }).then((j) => { showToast(j.ok ? 'Folder deleted' : 'Delete failed: ' + (j.error || '')); if (j.ok) fetchState(); })) });
     } else if (ctx.kind === 'project') {
       items.push({ label: 'Rename', run: () => promptModal('Rename project', ctx.name, (v) => apiPost('/api/fs/rename', { path: ctx.path, name: v }).then(() => fetchState())) });
       items.push({ label: 'Copy', run: () => copyText(ctx.name) });
@@ -1397,6 +1841,11 @@
       items.push({ label: 'Show in Explorer', run: () => apiPost('/api/open', { path: ctx.path, mode: 'explorer' }) });
       items.push('sep');
       items.push({ label: 'Delete', danger: true, run: () => confirmDelete(ctx) });
+    } else if (ctx.kind === 'file') {
+      if (ctx.fileType === 'file') items.push({ label: 'Open', run: () => loadFile(ctx.path, ctx.name) });
+      items.push({ label: 'Rename', run: () => promptModal('Rename file', ctx.name, (v) => apiPost('/api/fs/rename', { path: ctx.path, name: v }).then((j) => { showToast(j.ok ? 'File renamed' : 'Rename failed: ' + (j.error || '')); if (j.ok) fetchState(); })) });
+      items.push({ label: 'Copy', run: () => copyText(ctx.path) });
+      items.push({ label: 'Show in Explorer', run: () => apiPost('/api/open', { path: ctx.path, mode: 'explorer' }) });
     } else if (ctx.kind === 'ctxfile') {
       items.push({ label: 'Open', run: () => loadFile(ctx.path, ctx.name) });
       items.push({ label: 'Rename', run: () => promptModal('Rename file', ctx.name, (v) => apiPost('/api/fs/rename', { path: ctx.path, name: v }).then(() => fetchState())) });
@@ -1436,6 +1885,10 @@
         items.push({ label: 'Copy link', run: () => copyText(ctx.endpoint) });
         items.push({ label: 'Open link', run: () => window.open(ctx.endpoint, '_blank') });
       }
+    } else if (ctx.kind === 'convhead') {
+      items.push({ label: 'New Folder', run: () => promptModal('New conversation folder', 'Research', (name) => apiPost('/api/conversations/folders', { action: 'create', name }).then((j) => { showToast(j.ok ? 'Folder created' : 'Create failed: ' + (j.error || '')); if (j.ok) fetchState(); })) });
+    } else if (ctx.kind === 'filehead') {
+      items.push({ label: 'New Folder', run: () => promptModal('New folder in files', 'new-folder', (name) => apiPost('/api/fs/new-folder', { root: selectedFileRoot || 'agent', name }).then((j) => { showToast(j.ok ? 'Folder created' : 'Create failed: ' + (j.error || '')); if (j.ok) fetchState(); })) });
     } else if (ctx.kind === 'ctxhead') {
       items.push({ label: 'New Folder', run: () => promptModal('New folder in context', 'new-folder', (v) => apiPost('/api/fs/new-folder', { name: v }).then((j) => { showToast(j.ok ? 'Folder created' : 'Failed: ' + (j.error || '')); fetchState(); })) });
       items.push({
@@ -1471,9 +1924,9 @@
     const t = target instanceof Element ? target : document.body;
     const el = t.closest('[data-ctx]');
     if (el) {
-      const ctx = { kind: el.dataset.ctx, id: el.dataset.id || '', name: el.dataset.name || '', path: el.dataset.path || '', endpoint: el.dataset.endpoint || '', enabled: el.dataset.enabled !== '0', disabled: el.dataset.disabled === '1' };
+      const ctx = { kind: el.dataset.ctx, id: el.dataset.id || '', name: el.dataset.name || '', path: el.dataset.path || '', endpoint: el.dataset.endpoint || '', fileType: el.dataset.fileType || '', selectKind: el.dataset.selectKind || '', enabled: el.dataset.enabled !== '0', disabled: el.dataset.disabled === '1' };
       if (ctx.kind === 'skill' || ctx.kind === 'mcprow') ctx.list = ctx.kind === 'skill' ? 'skills' : 'mcp';
-      else if (ctx.kind === 'convgroup') ctx.list = 'conversations';
+      else if (ctx.kind === 'session') ctx.list = 'conversations';
       else if (ctx.kind === 'project') ctx.list = 'projects';
       return ctx;
     }
@@ -1483,7 +1936,7 @@
         ? rightClickInputSelection.selection
         : PiTechClipboard.captureSelection(inp.value, inp.selectionStart, inp.selectionEnd);
       rightClickInputSelection = null;
-      return { kind: 'input', el: inp, selection };
+      return { kind: 'input', el: inp, selection, word: wordAtInput(inp) };
     }
     if (t.closest('#term-wrap')) {
       const selection = rightClickTerminalSelection || term.getSelection();
@@ -1496,7 +1949,14 @@
   // Capture phase on window: fires before xterm's own contextmenu handlers (or any
   // stopPropagation) can interfere, so the native browser menu can never appear.
   window.addEventListener('contextmenu', (e) => {
+    const editable = e.target instanceof Element ? e.target.closest('input, textarea') : null;
+    if (nativeSpellcheckTarget && nativeSpellcheckTarget === editable) {
+      nativeSpellcheckTarget = null;
+      return;
+    }
+    nativeSpellcheckTarget = null;
     e.preventDefault();
+    prepareContextSelection(e.target);
     const ctx = resolveContext(e.target);
     if (ctx.kind === 'terminal') {
       e.stopPropagation();
@@ -1513,8 +1973,10 @@
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') hideMenu(); });
   window.addEventListener('blur', hideMenu);
 
-  // ---------------- file viewer (reuses the session panel) ----------------
+  // ---------------- file viewer + light editor (reuses the session panel) ----------------
+  let viewerPath = null;
   function loadFile(path, title) {
+    viewerPath = path;
     sessTitle.textContent = title || 'File';
     sessMeta.textContent = 'loading…';
     sessBody.innerHTML = '<div class="empty-note">loading…</div>';
@@ -1529,10 +1991,55 @@
         if (!j.ok && j.error) throw new Error(j.error);
         sessMeta.textContent = path;
         sessBody.innerHTML = '';
+        const actions = document.createElement('div');
+        actions.className = 'file-actions';
+        const editBtn = document.createElement('button');
+        editBtn.className = 'btn';
+        editBtn.textContent = 'Edit';
+        actions.appendChild(editBtn);
+        sessBody.appendChild(actions);
         const pre = document.createElement('pre');
         pre.className = 'file-view';
         pre.textContent = j.text;
         sessBody.appendChild(pre);
+        const startEdit = () => {
+          const ta = document.createElement('textarea');
+          ta.className = 'file-edit';
+          ta.value = j.text;
+          ta.spellcheck = true;
+          const saveBtn = document.createElement('button');
+          saveBtn.className = 'btn';
+          saveBtn.textContent = 'Save';
+          const cancelBtn = document.createElement('button');
+          cancelBtn.className = 'btn';
+          cancelBtn.textContent = 'Cancel';
+          actions.innerHTML = '';
+          actions.appendChild(saveBtn);
+          actions.appendChild(cancelBtn);
+          pre.replaceWith(ta);
+          cancelBtn.addEventListener('click', () => { ta.replaceWith(pre); actions.innerHTML = ''; actions.appendChild(editBtn); });
+          saveBtn.addEventListener('click', () => {
+            saveBtn.disabled = true;
+            saveBtn.textContent = 'Saving…';
+            fetch('/api/file/save', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ path, text: ta.value }),
+            })
+              .then((r) => r.json())
+              .then((res) => {
+                if (!res.ok) throw new Error(res.error || 'save failed');
+                j.text = ta.value;
+                pre.textContent = ta.value;
+                ta.replaceWith(pre);
+                actions.innerHTML = '';
+                actions.appendChild(editBtn);
+                sessMeta.textContent = path + ' — saved';
+              })
+              .catch((e) => { saveBtn.disabled = false; saveBtn.textContent = 'Save failed: ' + (e.message || '?'); });
+          });
+        };
+        editBtn.addEventListener('click', startEdit);
       })
       .catch((e) => {
         clearTimeout(to);
@@ -1556,6 +2063,7 @@
         el?.scrollIntoView({ block: 'center' });
       }, 400);
     } else if (kind === 'skill') {
+      openSkills();
       setTimeout(() => {
         const el = [...skillsList.querySelectorAll('.skill-row')].find((r) => r.dataset.name === v);
         el?.scrollIntoView({ block: 'center' });

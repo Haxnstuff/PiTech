@@ -16,8 +16,8 @@
   "scripts": {
     "start": "node server.js",
     "setup": "node setup.js",
-    "test": "node --test tests/clipboard.test.cjs tests/project-context.test.mjs && node tests/release.test.cjs",
-    "test:browser": "node tests/clipboard-browser.cjs && node tests/notepad-browser.cjs"
+    "test": "node --test tests/clipboard.test.cjs tests/conversations.test.cjs tests/conversation-organizer.test.cjs tests/path-notes.test.cjs tests/file-tree.test.cjs tests/project-context.test.mjs && node tests/release.test.cjs",
+    "test:browser": "node tests/clipboard-browser.cjs && node tests/notepad-browser.cjs && node tests/conversation-api.test.cjs && node tests/fixes-browser.cjs"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.10.0",
