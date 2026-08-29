@@ -18,7 +18,7 @@ async function collectSessionFiles(root) {
     }
   }
   await walk(root);
-  return files.sort();
+  return files.sort((left, right) => left.localeCompare(right));
 }
 
 async function readHeader(file) {

@@ -1129,7 +1129,7 @@ wss.on('connection', (ws) => {
     if (msg.type === 'input') {
       const data = typeof msg.data === 'string' ? msg.data : '';
       terminalInput = (terminalInput + data).slice(-10000);
-      if (/[\r\n\u0003]/.test(data)) flushPathNotes();
+      if (/[\r\n]/.test(data) || data.includes(String.fromCharCode(3))) flushPathNotes();
       if (ptyProc && data) ptyProc.write(data);
     }
     else if (msg.type === 'resize') {
