@@ -14,11 +14,11 @@ assert.equal(pkg.author, 'Haxnstuff');
 assert.equal(pkg.version, '1.1.2');
 assert.equal(pkg.license, 'MIT');
 assert.equal(pkg.repository?.url, 'https://github.com/Haxnstuff/PiTech.git');
-assert.equal(pkg.scripts?.test, 'node --test tests/clipboard.test.cjs tests/conversations.test.cjs tests/conversation-organizer.test.cjs tests/path-notes.test.cjs tests/file-tree.test.cjs tests/project-context.test.mjs && node tests/release.test.cjs');
+assert.equal(pkg.scripts?.test, 'node --test tests/clipboard.test.cjs tests/conversations.test.cjs tests/conversation-organizer.test.cjs tests/path-notes.test.cjs tests/file-tree.test.cjs tests/file-history.test.cjs tests/safe-path.test.cjs tests/server-history.test.cjs tests/project-context.test.mjs && node tests/release.test.cjs');
 assert.equal(pkg.scripts?.['test:browser'], 'node tests/clipboard-browser.cjs && node tests/notepad-browser.cjs && node tests/conversation-api.test.cjs && node tests/fixes-browser.cjs');
 
 const ignored = read('.gitignore');
-for (const entry of ['node_modules/', 'config.json', 'server.log', 'public/vendor/', 'chrome-test-profile/']) {
+for (const entry of ['node_modules/', 'config.json', 'server.log', 'public/vendor/', 'chrome-test-profile/', '.pitech-trash/']) {
   assert.match(ignored, new RegExp(`^${entry.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'm'), `.gitignore must contain ${entry}`);
 }
 
@@ -121,6 +121,8 @@ assert.match(css, /\.conv-folder\.drag-over/);
 
 for (const file of [
   'server.js',
+  'file-history.js',
+  'safe-path.js',
   'file-tree.js',
   'conversation-store.js',
   'conversation-meta.js',
@@ -135,6 +137,9 @@ for (const file of [
   'tests/conversation-organizer.test.cjs',
   'tests/path-notes.test.cjs',
   'tests/fixes-browser.cjs',
+  'tests/file-history.test.cjs',
+  'tests/safe-path.test.cjs',
+  'tests/server-history.test.cjs',
   'tests/conversations.test.cjs',
   'pi/extensions/pi-webui.ts',
   'pi/scripts/path-notes.js',

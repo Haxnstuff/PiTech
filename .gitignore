@@ -4,6 +4,7 @@ config.json
 server.log
 public/vendor/
 chrome-test-profile/
+.pitech-trash/
 *.png
 .DS_Store
 Thumbs.db

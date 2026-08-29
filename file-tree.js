@@ -25,6 +25,7 @@ async function listTree(root, target = root) {
   if (!isWithin(root, resolved)) throw new Error('path is outside the active workspace');
   const entries = await fs.promises.readdir(resolved, { withFileTypes: true });
   return entries
+    .filter((entry) => !['.pitech-history.json', '.pitech-trash'].includes(entry.name))
     .filter((entry) => entry.isDirectory() || entry.isFile())
     .map((entry) => ({
       name: entry.name,

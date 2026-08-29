@@ -1,6 +1,11 @@
 // PiTech by Haxnstuff
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 import * as projects from '../pi/scripts/projects.mjs';
 
 test('reserves project command aliases and does not duplicate them in completions', () => {
@@ -94,4 +99,33 @@ test('bounds Unicode-heavy project context by UTF-8 bytes', () => {
   assert.ok(Buffer.byteLength(context, 'utf8') <= 900, `context exceeded limit: ${Buffer.byteLength(context, 'utf8')} bytes`);
   assert.doesNotMatch(context, /�/);
   assert.match(context, /truncated/i);
+});
+
+test('failed project manifest append removes the copied session', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'pitech-project-copy-'));
+  const source = path.join(home, 'source.jsonl');
+  fs.writeFileSync(source, '{"session":true}\n');
+  const moduleUrl = pathToFileURL(path.join(import.meta.dirname, '..', 'pi', 'scripts', 'projects.mjs')).href;
+  const script = `
+    import fs from 'node:fs';
+    import path from 'node:path';
+    const projects = await import(${JSON.stringify(moduleUrl)});
+    const project = await projects.newProject('Rollback');
+    await fs.promises.rm(project.manifest, { force: true });
+    await fs.promises.mkdir(project.manifest);
+    let failed = false;
+    try { await projects.addSessionToProject('Rollback', ${JSON.stringify(source)}); }
+    catch { failed = true; }
+    const destination = path.join(project.dir, 'sessions', path.basename(${JSON.stringify(source)}));
+    if (!failed || fs.existsSync(destination)) process.exit(1);
+  `;
+  try {
+    const result = spawnSync(process.execPath, ['--input-type=module', '--eval', script], {
+      encoding: 'utf8',
+      env: { ...process.env, USERPROFILE: home, HOME: home },
+    });
+    assert.equal(result.status, 0, result.stderr || result.stdout || 'copy rollback subprocess failed');
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
 });

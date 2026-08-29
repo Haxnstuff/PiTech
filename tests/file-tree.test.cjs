@@ -13,6 +13,8 @@ test('lists one directory level with folders first and blocks paths outside the 
   const root = path.join(base, 'project');
   fs.mkdirSync(path.join(root, 'src'), { recursive: true });
   fs.writeFileSync(path.join(root, 'README.md'), '# Project');
+  fs.writeFileSync(path.join(root, '.pitech-history.json'), '{}');
+  fs.mkdirSync(path.join(root, '.pitech-trash'));
   fs.writeFileSync(path.join(base, 'secret.txt'), 'nope');
 
   assert.equal(isWithin(root, root), true);
