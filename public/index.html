@@ -32,6 +32,7 @@
       <span id="status">connecting&hellip;</span>
     </div>
     <button class="btn" id="new-session" title="Send /new to pi (start a fresh session)">New</button>
+    <button class="btn" id="skills-btn" title="Open the Skills panel">Skills</button>
     <button class="btn" id="mcp-btn" title="Open the MCP servers panel">MCP</button>
     <button class="btn" id="restart" title="Kill pi and start a fresh session">Restart</button>
     <button class="btn" id="settings-btn" title="Settings" aria-label="Settings">Settings</button>
@@ -52,7 +53,7 @@
       </section>
 
       <section class="side-section grow">
-        <h3>Past Conversations</h3>
+        <h3 data-ctx="convhead">Past Sessions <span class="hint">right-click to organize</span><span id="conv-count" class="g-count"></span></h3>
         <ul id="conv-list" class="side-list"></ul>
       </section>
     </aside>
@@ -64,15 +65,30 @@
     <div class="resizer right" id="resize-right" title="Drag to resize sidebar"></div>
 
     <aside id="sidebar-right" class="sidebar right">
-      <div class="side-head">Skills <span id="skill-count" class="hint"></span></div>
-      <div class="skill-controls">
-        <input id="skill-search" type="search" placeholder="Filter skills…" autocomplete="off" spellcheck="false" aria-label="Filter skills">
-        <label class="skill-filter"><input type="checkbox" id="skill-filter"> active only</label>
+      <div class="side-head file-head" data-ctx="filehead">
+        <span>Files</span>
+        <select id="file-root-select" class="form-select" aria-label="File root"></select>
+        <span id="file-root-name" class="hint"></span>
       </div>
-      <div class="skill-legend"><span class="dot2 on"></span> active in current prompt</div>
-      <ul id="skills-list" class="side-list"></ul>
+      <div class="file-legend"><span class="edit-dot pi"></span> pi <span class="edit-dot sub"></span> subagent</div>
+      <ul id="file-tree" class="side-list file-tree"></ul>
     </aside>
   </main>
+
+  <!-- Skills floating panel -->
+  <div id="skills-panel" class="mcp-panel skills-panel hidden" role="dialog" aria-label="Skills">
+    <div class="mcp-head" id="skills-head" title="Drag to move">
+      <span class="mcp-title">Skills <span id="skill-count" class="hint"></span></span>
+      <button class="icon-btn" id="skills-close" title="Close" aria-label="Close">&times;</button>
+    </div>
+    <div class="skill-controls">
+      <input id="skill-search" type="search" placeholder="Filter skills…" autocomplete="off" spellcheck="false" aria-label="Filter skills">
+      <label class="skill-filter"><input type="checkbox" id="skill-filter"> active only</label>
+    </div>
+    <div class="skill-legend"><span class="dot2 on"></span> used in current prompt</div>
+    <ul id="skills-list" class="side-list"></ul>
+    <div class="session-resize" id="skills-resize" title="Drag to resize"></div>
+  </div>
 
   <!-- MCP floating panel -->
   <div id="mcp-panel" class="mcp-panel hidden" role="dialog" aria-label="MCP servers">
@@ -237,6 +253,19 @@
       <div class="modal-actions">
         <button class="btn" id="prompt-cancel">Cancel</button>
         <button class="btn primary" id="prompt-ok">OK</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- bulk rename modal -->
+  <div id="bulk-rename-modal" class="modal hidden" role="dialog" aria-label="Rename selected items">
+    <div class="modal-box bulk-rename-box">
+      <div class="modal-title">Rename selected items</div>
+      <p class="modal-sub" id="bulk-rename-sub"></p>
+      <div id="bulk-rename-list" class="bulk-rename-list"></div>
+      <div class="modal-actions">
+        <button class="btn" id="bulk-rename-cancel">Cancel</button>
+        <button class="btn primary" id="bulk-rename-ok">Rename</button>
       </div>
     </div>
   </div>

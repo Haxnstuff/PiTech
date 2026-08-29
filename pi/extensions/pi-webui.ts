@@ -6,26 +6,37 @@
 //  - writes ~/.pi/agent/webui-state.json so the web UI can show which skills
 //    are active in the current prompt.
 import { SessionManager, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { access, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
+import { appendPaths, extractPaths, pathNotesPath } from "../scripts/path-notes.js";
 
 const AGENT = join(homedir(), ".pi", "agent");
-const STATE_FILE = join(AGENT, "webui-state.json");
+const STATE_FILE = process.env.PITECH_STATE_FILE || join(AGENT, "webui-state.json");
+const PATHS_FILE = pathNotesPath(AGENT);
 const PROJECT_STATE_FILE = join(AGENT, "pitech-project.json");
 const LIB_FILE = join(AGENT, "scripts", "projects.mjs");
+const IS_SUBAGENT = Number(process.env.PI_SUBAGENT_DEPTH || "0") > 0;
+const ACTIVITY_FILE = join(AGENT, `webui-editing-${process.pid}.json`);
 
-function skillNames(skills: unknown): string[] {
-  if (!Array.isArray(skills)) return [];
-  return skills
-    .map((s: any) => (typeof s === "string" ? s : s?.name))
-    .filter((n): n is string => typeof n === "string" && n.length > 0);
+function skillFiles(skills: unknown): Map<string, string> {
+  const out = new Map<string, string>();
+  if (!Array.isArray(skills)) return out;
+  for (const skill of skills as any[]) {
+    const name = typeof skill === "object" ? skill?.name : null;
+    const file = typeof skill === "object" ? skill?.filePath : null;
+    if (typeof name === "string" && name && typeof file === "string" && file) {
+      out.set(resolve(file).toLowerCase(), name);
+    }
+  }
+  return out;
 }
 
-async function writeState(skills: string[], project: string | null) {
+async function writeState(skills: string[], project: string | null, cwd: string) {
+  if (IS_SUBAGENT) return;
   try {
-    await writeFile(STATE_FILE, JSON.stringify({ ts: Date.now(), skills, project }), "utf8");
+    await writeFile(STATE_FILE, JSON.stringify({ ts: Date.now(), skills, project, cwd }), "utf8");
   } catch {}
 }
 
@@ -77,6 +88,27 @@ export default async function registerPiWebui(pi: ExtensionAPI) {
   let activeProject = await readActiveProject();
   let projectContext = "";
   let projectSessionCount = 0;
+  let activeSkills: string[] = [];
+  let currentSkillFiles = new Map<string, string>();
+  let pendingSkillNames = new Set<string>();
+  let currentCwd = process.cwd();
+  const editedFiles = new Set<string>();
+  const activeEditCalls = new Set<string>();
+
+  async function writeActivity(expiresAt?: number) {
+    if (!editedFiles.size) {
+      try { await unlink(ACTIVITY_FILE); } catch {}
+      return;
+    }
+    try {
+      await writeFile(ACTIVITY_FILE, JSON.stringify({
+        ts: Date.now(),
+        who: IS_SUBAGENT ? "sub" : "pi",
+        files: [...editedFiles],
+        ...(expiresAt ? { expiresAt } : {}),
+      }), "utf8");
+    } catch {}
+  }
 
   async function activateProject(name: string, ctx: any) {
     const loaded = await loadProjectContext(name, ctx.sessionManager?.getSessionFile?.());
@@ -97,6 +129,8 @@ export default async function registerPiWebui(pi: ExtensionAPI) {
   }
 
   pi.on("session_start", async (_event, ctx) => {
+    currentCwd = (ctx as any).cwd || process.cwd();
+    await writeState(activeSkills, activeProject, currentCwd);
     if (!activeProject) {
       ctx.ui.setStatus("pitech-project", undefined);
       return;
@@ -110,12 +144,68 @@ export default async function registerPiWebui(pi: ExtensionAPI) {
     }
   });
 
-  // Keep the web UI's "skills active in current prompt" list fresh and add
+  async function recordPaths(text: string) {
+    const paths = extractPaths(text);
+    if (paths.length) await appendPaths(PATHS_FILE, paths);
+  }
+
+  // Keep the web UI's "skills used in current prompt" list fresh and add
   // compaction-aware history from the active project's other sessions.
-  pi.on("before_agent_start", async (event) => {
-    await writeState(skillNames((event as any).systemPromptOptions?.skills), activeProject);
+  pi.on("input", async (event) => {
+    await recordPaths(event.text);
+    const match = /^\/skill:([^\s]+)/.exec(event.text);
+    if (match) pendingSkillNames.add(match[1]);
+  });
+
+  pi.on("before_agent_start", async (event, ctx) => {
+    await recordPaths(event.prompt);
+    activeSkills = [];
+    currentSkillFiles = skillFiles((event as any).systemPromptOptions?.skills);
+    for (const name of pendingSkillNames) {
+      if ([...currentSkillFiles.values()].includes(name)) activeSkills.push(name);
+    }
+    pendingSkillNames.clear();
+    currentCwd = (ctx as any).cwd || process.cwd();
+    await writeState(activeSkills, activeProject, currentCwd);
     if (!projectContext) return undefined;
     return { systemPrompt: `${event.systemPrompt}\n\n${projectContext}` };
+  });
+
+  pi.on("agent_start", async () => {
+    editedFiles.clear();
+    activeEditCalls.clear();
+    await writeActivity();
+  });
+
+  pi.on("tool_execution_start", async (event) => {
+    const file = (event.args as any)?.path;
+    if (typeof file === "string" && file.trim() && /^read$/i.test(event.toolName)) {
+      const skill = currentSkillFiles.get(resolve(currentCwd, file).toLowerCase());
+      if (skill && !activeSkills.includes(skill)) {
+        activeSkills.push(skill);
+        await writeState(activeSkills, activeProject, currentCwd);
+      }
+      return;
+    }
+    if (!/^(edit|write)$/i.test(event.toolName)) return;
+    if (typeof file !== "string" || !file.trim()) return;
+    editedFiles.add(resolve(currentCwd, file));
+    activeEditCalls.add(event.toolCallId);
+    await writeActivity();
+  });
+
+  pi.on("tool_execution_end", async (event) => {
+    if (!activeEditCalls.delete(event.toolCallId)) return;
+    await writeActivity();
+  });
+
+  pi.on("agent_end", async () => {
+    activeEditCalls.clear();
+    await writeActivity(Date.now() + 15_000);
+  });
+
+  pi.on("session_shutdown", async () => {
+    try { await unlink(ACTIVITY_FILE); } catch {}
   });
 
   pi.registerCommand("project", {
