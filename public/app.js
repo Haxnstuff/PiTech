@@ -516,13 +516,13 @@
     applySelection();
   }
 
-  function selectedEntriesFor(ctx) {
-    if (!ctx.selectKind || selectedKind !== ctx.selectKind) return [];
+  function selectedEntries(kind = selectedKind) {
+    if (!kind || selectedKind !== kind) return [];
     const seen = new Set();
     const entries = [];
     for (const row of document.querySelectorAll('[data-select-kind][data-select-key]')) {
       const key = row.dataset.selectKey;
-      if (row.dataset.selectKind !== ctx.selectKind || !selectedKeys.has(key) || seen.has(key)) continue;
+      if (row.dataset.selectKind !== kind || !selectedKeys.has(key) || seen.has(key)) continue;
       seen.add(key);
       entries.push({
         key,
@@ -532,6 +532,43 @@
       });
     }
     return entries;
+  }
+
+  function selectedEntriesFor(ctx) {
+    return ctx.selectKind ? selectedEntries(ctx.selectKind) : [];
+  }
+
+  function isEditableTarget(target) {
+    return target instanceof Element && !!(target.closest('input, textarea, select') || target.isContentEditable);
+  }
+
+  async function runHistory(action) {
+    const response = await apiPost(`/api/history/${action}`, {});
+    if (!response.ok) {
+      showToast(`${action === 'undo' ? 'Undo' : 'Redo'} failed: ${response.error || 'unknown'}`);
+      return;
+    }
+    showToast(response.changed ? `${action === 'undo' ? 'Undid' : 'Redid'} ${response.label}` : `Nothing to ${action}`);
+    if (response.changed) {
+      clearSelection();
+      await fetchState();
+    }
+  }
+
+  function deleteSelection() {
+    const entries = selectedEntries();
+    if (!entries.length) return;
+    const count = entries.length;
+    confirmModal(`Delete ${count} selected item${count === 1 ? '' : 's'}?`, 'This can be restored with Ctrl+Z.', 'Delete', async () => {
+      const response = await apiPost('/api/fs/delete-batch', { paths: entries.map((entry) => entry.path) });
+      if (!response.ok) {
+        showToast(`Delete failed: ${response.error || 'unknown'}`);
+        return;
+      }
+      clearSelection();
+      showToast(`Deleted ${count} item${count === 1 ? '' : 's'}`);
+      await fetchState();
+    });
   }
 
   // ---------------- state ----------------
@@ -734,7 +771,7 @@
       row.innerHTML = `<span class="s-time">${fmtTime(session.mtime)}</span><span class="s-snippet">${esc(session.title || session.file)}</span>`;
       row.addEventListener('dragstart', (e) => {
         e.dataTransfer.setData('text/plain', JSON.stringify({ src: session.path }));
-        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.effectAllowed = 'copyMove';
       });
       row.addEventListener('click', (event) => selectRow(row, event, () => loadSession(session.path, session.title)));
       parent.appendChild(row);
@@ -1031,6 +1068,24 @@
     if (!mcpPanel.classList.contains('hidden') && !mcpPanel.contains(e.target) && e.target.id !== 'mcp-btn' && !e.target.closest('#ctx-menu')) closeMcp();
   });
   document.addEventListener('keydown', (e) => {
+    if (!isEditableTarget(e.target) && !e.repeat) {
+      if (e.key === 'Delete' && selectedKeys.size) {
+        e.preventDefault();
+        deleteSelection();
+        return;
+      }
+      if (e.ctrlKey && !e.altKey && !e.metaKey) {
+        const key = e.key.toLowerCase();
+        const action = key === 'z' && !e.shiftKey ? 'undo'
+          : key === 'y' || (key === 'z' && e.shiftKey) ? 'redo'
+          : null;
+        if (action) {
+          e.preventDefault();
+          runHistory(action);
+          return;
+        }
+      }
+    }
     if (e.key === 'Escape' && !skillsPanel.classList.contains('hidden')) closeSkills();
     if (e.key === 'Escape' && !mcpPanel.classList.contains('hidden')) closeMcp();
     if (e.key === 'Escape' && !sessPanel.classList.contains('hidden')) closeSessionPanel();

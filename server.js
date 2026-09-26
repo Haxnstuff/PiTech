@@ -28,6 +28,8 @@ const { createJupyterBridge, JUPYTER_INSTALL_URL } = require('./jupyter-bridge')
 const { langCheck, langRun } = require('./langexec');
 
 const jupyterBridge = createJupyterBridge({ log: (m) => console.log(m) });
+const { createFileHistory } = require('./file-history');
+const { isWithinRealRoot, samePath } = require('./safe-path');
 
 const ROOT = __dirname;
 const PUBLIC = path.join(ROOT, 'public');
@@ -38,6 +40,8 @@ const CONTEXT_DIR = path.join(AGENT, 'context');
 const PATHS_FILE = pathNotesPath(AGENT);
 const STATE_FILE = path.join(AGENT, 'webui-state-pitech.json');
 const MCP_FILE = path.join(AGENT, 'mcp.json');
+const HISTORY_FILE = path.join(AGENT, '.pitech-history.json');
+const HISTORY_TRASH = path.join(AGENT, '.pitech-trash');
 
 let fileConfig = {};
 try { fileConfig = JSON.parse(fs.readFileSync(path.join(ROOT, 'config.json'), 'utf8')); } catch {}
@@ -458,13 +462,8 @@ const sortPinned = (arr, key, pinned) => [
 ];
 
 function conversationPathAllowed(value) {
-  const target = path.normalize(String(value || ''));
-  const relative = path.relative(CONVERSATIONS_DIR, target);
-  return target.toLowerCase().endsWith('.jsonl')
-    && relative
-    && relative !== '..'
-    && !relative.startsWith(`..${path.sep}`)
-    && !path.isAbsolute(relative);
+  const target = path.resolve(String(value || ''));
+  return target.toLowerCase().endsWith('.jsonl') && isWithinRealRoot(CONVERSATIONS_DIR, target);
 }
 
 function conversationMetaFromPins(pins) {
@@ -487,6 +486,50 @@ const FILE_ROOTS = [
   { id: 'pitech', label: 'PiTech project', hint: ROOT, path: ROOT },
 ];
 const FILE_ROOT_PATHS = FILE_ROOTS.map((root) => root.path);
+const PRIVATE_TRASH_ROOTS = FILE_ROOT_PATHS.map((root) => ({ root, trash: path.join(root, '.pitech-trash') }));
+
+function insideRoot(root, target) {
+  return isWithinRealRoot(root, target);
+}
+
+function isPrivateTrashPath(target) {
+  return PRIVATE_TRASH_ROOTS.some(({ root, trash }) => insideRoot(root, trash)
+    && (samePath(target, trash) || insideRoot(trash, target)));
+}
+
+function historyPathAllowed(value) {
+  const target = path.resolve(String(value || ''));
+  if (samePath(target, HISTORY_FILE)) return false;
+  return isPrivateTrashPath(target) || FILE_ROOT_PATHS.some((root) => insideRoot(root, target));
+}
+
+function reversibleUserPathAllowed(value) {
+  const target = path.resolve(String(value || ''));
+  if (samePath(target, HISTORY_FILE) || isPrivateTrashPath(target)) return false;
+  return FILE_ROOT_PATHS.some((root) => insideRoot(root, target));
+}
+
+function historyTrashForPath(value) {
+  const root = [...FILE_ROOT_PATHS]
+    .sort((left, right) => right.length - left.length)
+    .find((candidate) => insideRoot(candidate, value));
+  if (!root) throw new Error(`path is not inside a file root: ${value}`);
+  const trash = path.join(root, '.pitech-trash');
+  if (!insideRoot(root, trash)) throw new Error(`private trash escapes its file root: ${trash}`);
+  return trash;
+}
+
+const history = createFileHistory({
+  journalPath: HISTORY_FILE,
+  trashDir: HISTORY_TRASH,
+  trashForPath: historyTrashForPath,
+  isAllowedPath: historyPathAllowed,
+});
+
+async function readOptionalText(file) {
+  try { return await fs.promises.readFile(file, 'utf8'); }
+  catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+}
 
 async function readWebuiState() {
   try { return JSON.parse(await fs.promises.readFile(STATE_FILE, 'utf8')); } catch { return {}; }
@@ -618,6 +661,17 @@ const server = http.createServer(async (req, res) => {
       if (req.method === 'GET' && urlPath === '/api/state') {
         return sendJson(res, 200, await getState());
       }
+      if (req.method === 'POST' && (urlPath === '/api/history/undo' || urlPath === '/api/history/redo')) {
+        try {
+          const action = urlPath.endsWith('/undo') ? 'undo' : 'redo';
+          const result = await history[action]();
+          convCache.ts = 0;
+          return sendJson(res, 200, { ok: true, ...result });
+        } catch (error) {
+          const conflict = /changed since|already exists|no longer exists|does not exist/i.test(error.message);
+          return sendJson(res, conflict ? 409 : 500, { ok: false, error: error.message });
+        }
+      }
       if (req.method === 'GET' && urlPath === '/api/session') {
         const u = new URL(req.url, 'http://localhost');
         const file = path.normalize(u.searchParams.get('file') || '');
@@ -657,15 +711,22 @@ const server = http.createServer(async (req, res) => {
         }
         try {
           await fs.promises.stat(conversationPath);
+          const before = await readOptionalText(PINS_FILE);
           const pins = await readPins();
           let meta = conversationMetaFromPins(pins);
           if (Object.prototype.hasOwnProperty.call(body, 'title')) meta = renameConversation(meta, conversationPath, body.title);
           if (Object.prototype.hasOwnProperty.call(body, 'folder')) meta = moveConversation(meta, conversationPath, body.folder);
           saveConversationMeta(pins, meta);
-          await writePins(pins);
+          const after = JSON.stringify(pins, null, 2);
+          if (before !== after) {
+            await history.perform('edit session organization', [
+              { kind: 'write', path: PINS_FILE, before, after },
+            ]);
+          }
           convCache.ts = 0;
           return sendJson(res, 200, { ok: true });
         } catch (e) {
+          convCache.ts = 0;
           return sendJson(res, 400, { ok: false, error: e.message });
         }
       }
@@ -695,35 +756,67 @@ const server = http.createServer(async (req, res) => {
       }
       if (req.method === 'POST' && urlPath === '/api/sessions/copy') {
         const body = await readBody(req);
-        const src = path.normalize(body.src || '');
+        const src = path.resolve(body.src || '');
         const lib = await getProjLib();
         const projDir = lib.PROJECTS_DIR;
-        const inSessions = src.startsWith(SESSIONS_DIR + path.sep) || src.startsWith(CONVERSATIONS_DIR + path.sep);
-        const inProjects = src.startsWith(projDir + path.sep);
+        const inSessions = insideRoot(SESSIONS_DIR, src) || insideRoot(CONVERSATIONS_DIR, src);
+        const inProjects = insideRoot(projDir, src);
         if (!inSessions && !inProjects) {
           return sendJson(res, 400, { ok: false, error: 'src must live under ~/.pi/agent/conversations or projects' });
         }
-        if (inProjects && src.startsWith(path.join(projDir, String(body.project || '')) + path.sep)) {
+        if (inProjects && insideRoot(path.join(projDir, String(body.project || '')), src)) {
           return sendJson(res, 400, { ok: false, error: 'session is already in that project' });
         }
-        let copied = 0;
         try {
-          const st = await fs.promises.stat(src);
-          if (st.isDirectory()) {
-            const files = (await fs.promises.readdir(src)).filter((f) => f.endsWith('.jsonl'));
-            for (const f of files) {
-              await lib.addSessionToProject(body.project, path.join(src, f));
-              copied++;
+          const result = await history.recordTransaction(async () => {
+            let manifest;
+            let manifestBefore;
+            const copies = [];
+            const rollback = async () => {
+              if (!copies.length || manifestBefore == null) return;
+              await Promise.all(copies.map((operation) => fs.promises.rm(operation.to, { force: true })));
+              await fs.promises.writeFile(manifest, manifestBefore, 'utf8');
+            };
+            try {
+              const st = await fs.promises.stat(src);
+              const files = st.isDirectory()
+                ? (await fs.promises.readdir(src)).filter((file) => file.endsWith('.jsonl')).map((file) => path.join(src, file))
+                : [src];
+              if (files.some((file) => !file.endsWith('.jsonl'))) throw new Error('only .jsonl session files can be copied');
+              if (!files.length) return { label: 'copy 0 sessions into project', operations: [], value: { copied: 0 } };
+              const project = await lib.newProject(body.project);
+              manifest = project.manifest;
+              manifestBefore = await fs.promises.readFile(manifest, 'utf8');
+              for (const file of files) {
+                const destination = path.join(project.dir, 'sessions', path.basename(file));
+                await fs.promises.copyFile(file, destination, fs.constants.COPYFILE_EXCL);
+                copies.push({ kind: 'copy', from: file, to: destination });
+                await fs.promises.appendFile(
+                  manifest,
+                  `- ${path.basename(file)} (added ${new Date().toISOString()})\n`,
+                  'utf8'
+                );
+              }
+              const manifestAfter = await fs.promises.readFile(manifest, 'utf8');
+              return {
+                label: `copy ${copies.length} session${copies.length === 1 ? '' : 's'} into project`,
+                operations: copies.length ? [
+                  ...copies,
+                  { kind: 'write', path: manifest, before: manifestBefore, after: manifestAfter },
+                ] : [],
+                value: { copied: copies.length },
+                rollback,
+              };
+            } catch (error) {
+              try { await rollback(); }
+              catch (rollbackError) { throw new AggregateError([error, rollbackError], 'session copy and rollback both failed'); }
+              throw error;
             }
-          } else {
-            if (!src.endsWith('.jsonl')) return sendJson(res, 400, { ok: false, error: 'only .jsonl session files can be copied' });
-            await lib.addSessionToProject(body.project, src);
-            copied = 1;
-          }
+          });
+          return sendJson(res, 200, { ok: true, copied: result.copied });
         } catch (e) {
-          return sendJson(res, 400, { ok: false, error: e.message });
+          return sendJson(res, e instanceof AggregateError ? 500 : 400, { ok: false, error: e.message });
         }
-        return sendJson(res, 200, { ok: true, copied });
       }
       if (req.method === 'POST' && urlPath === '/api/update') {
         const body = await readBody(req);
@@ -772,17 +865,19 @@ const server = http.createServer(async (req, res) => {
           return sendJson(res, 200, { ok: true });
         } catch (e) { return sendJson(res, 500, { ok: false, error: e.message }); }
       }
-      if (req.method === 'POST' && urlPath === '/api/fs/delete') {
+      if (req.method === 'POST' && (urlPath === '/api/fs/delete' || urlPath === '/api/fs/delete-batch')) {
         const body = await readBody(req);
-        const p = path.normalize(body.path || '');
-        const lib = await getProjLib();
-        const allowed = [SESSIONS_DIR, CONVERSATIONS_DIR, CONTEXT_DIR, path.join(AGENT, 'skills'), lib.PROJECTS_DIR];
-        if (!allowed.some((r) => p.startsWith(r + path.sep))) {
+        const paths = urlPath.endsWith('/delete-batch')
+          ? (Array.isArray(body.paths) ? body.paths.map((value) => path.normalize(String(value || ''))) : [])
+          : [path.normalize(String(body.path || ''))];
+        const unique = [...new Set(paths.filter(Boolean))];
+        if (!unique.length || !unique.every(reversibleUserPathAllowed)) {
           return sendJson(res, 400, { ok: false, error: 'path not deletable' });
         }
         try {
-          await fs.promises.rm(p, { recursive: true, force: true });
-          return sendJson(res, 200, { ok: true });
+          const result = await history.deletePaths(unique, `delete ${unique.length} selected item${unique.length === 1 ? '' : 's'}`);
+          convCache.ts = 0;
+          return sendJson(res, 200, { ok: true, ...result });
         } catch (e) { return sendJson(res, 500, { ok: false, error: e.message }); }
       }
       if (req.method === 'POST' && urlPath === '/api/fs/rename') {
@@ -791,29 +886,42 @@ const server = http.createServer(async (req, res) => {
         const name = sanitizeFsName(body.name);
         if (!name || name.includes('/') || name.includes('\\')) return sendJson(res, 400, { ok: false, error: 'invalid name' });
         const lib = await getProjLib();
-        const inCtx = p.startsWith(CONTEXT_DIR + path.sep);
-        const inProj = p.startsWith(lib.PROJECTS_DIR + path.sep);
-        const inFileRoot = FILE_ROOT_PATHS.some((root) => p.startsWith(root + path.sep));
+        const inCtx = insideRoot(CONTEXT_DIR, p);
+        const inProj = insideRoot(lib.PROJECTS_DIR, p);
+        const inFileRoot = FILE_ROOT_PATHS.some((root) => insideRoot(root, p));
         if (!inCtx && !inProj && !inFileRoot) return sendJson(res, 400, { ok: false, error: 'path not renameable' });
         const dest = path.join(path.dirname(p), name);
+        if (!reversibleUserPathAllowed(p) || !reversibleUserPathAllowed(dest)) {
+          return sendJson(res, 400, { ok: false, error: 'path not renameable' });
+        }
         try {
-          await fs.promises.rename(p, dest);
-          if (inProj) {
-            const mf = path.join(dest, 'project.md');
-            try {
-              const txt = await fs.promises.readFile(mf, 'utf8');
-              await fs.promises.writeFile(mf, txt.replace(/^# Project: .*$/m, `# Project: ${name}`), 'utf8');
-            } catch {}
+          const projectRootRename = inProj
+            && samePath(path.dirname(p), lib.PROJECTS_DIR)
+            && (await fs.promises.stat(p)).isDirectory();
+          const manifestBefore = projectRootRename ? await readOptionalText(path.join(p, 'project.md')) : null;
+          if (manifestBefore !== null) {
+            const manifestAfter = manifestBefore.replace(/^# Project: .*$/m, `# Project: ${name}`);
+            const operations = [{ kind: 'move', from: p, to: dest }];
+            if (manifestAfter !== manifestBefore) {
+              operations.push({ kind: 'write', path: path.join(dest, 'project.md'), before: manifestBefore, after: manifestAfter });
+            }
+            await history.perform('rename project', operations);
+          } else {
+            await history.renamePath(p, dest, 'rename file');
           }
           return sendJson(res, 200, { ok: true, dest });
-        } catch (e) { return sendJson(res, 500, { ok: false, error: e.message }); }
+        } catch (e) {
+          return sendJson(res, 500, { ok: false, error: e.message });
+        }
       }
       if (req.method === 'POST' && urlPath === '/api/open') {
         const body = await readBody(req);
         const p = path.normalize(body.path || '');
         const lib = await getProjLib();
         const roots = [...FILE_ROOT_PATHS, lib.PROJECTS_DIR, CONVERSATIONS_DIR];
-        if (!roots.some((r) => p.startsWith(r + path.sep))) return sendJson(res, 400, { ok: false, error: 'path not allowed' });
+        if (!roots.some((root) => samePath(root, p) || insideRoot(root, p))) {
+          return sendJson(res, 400, { ok: false, error: 'path not allowed' });
+        }
         try {
           const st = await fs.promises.stat(p);
           if (body.mode === 'explorer') {
@@ -828,6 +936,9 @@ const server = http.createServer(async (req, res) => {
         const u = new URL(req.url, 'http://localhost');
         const selected = fileRoot(u.searchParams.get('root'));
         const requested = path.resolve(u.searchParams.get('path') || selected.path);
+        if (!samePath(requested, selected.path) && !reversibleUserPathAllowed(requested)) {
+          return sendJson(res, 400, { ok: false, error: 'path is private or outside the active workspace' });
+        }
         try {
           const entries = await listTree(selected.path, requested);
           return sendJson(res, 200, { ok: true, rootId: selected.id, root: selected.path, path: requested, entries });
@@ -840,7 +951,7 @@ const server = http.createServer(async (req, res) => {
         const p = path.normalize(u.searchParams.get('path') || '');
         const lib = await getProjLib();
         const roots = [...FILE_ROOT_PATHS, lib.PROJECTS_DIR, CONVERSATIONS_DIR];
-        if (!isAllowedFile(roots, p)) {
+        if (!isAllowedFile(roots, p) || !reversibleUserPathAllowed(p)) {
           return sendJson(res, 400, { ok: false, error: 'file not allowed' });
         }
         try {
@@ -858,11 +969,11 @@ const server = http.createServer(async (req, res) => {
         const text = typeof body.text === 'string' ? body.text : null;
         const lib = await getProjLib();
         const roots = [...FILE_ROOT_PATHS, lib.PROJECTS_DIR, CONVERSATIONS_DIR];
-        if (!isAllowedFile(roots, p)) return sendJson(res, 400, { ok: false, error: 'file not allowed' });
+        if (!isAllowedFile(roots, p) || !reversibleUserPathAllowed(p)) return sendJson(res, 400, { ok: false, error: 'file not allowed' });
         if (text === null || Buffer.byteLength(text, 'utf8') > 200 * 1024) return sendJson(res, 400, { ok: false, error: 'text too large or missing' });
         try {
-          await fs.promises.writeFile(p, text, 'utf8');
-          return sendJson(res, 200, { ok: true });
+          const result = await history.writeText(p, text, 'edit file');
+          return sendJson(res, 200, { ok: true, ...result });
         } catch (e) { return sendJson(res, 500, { ok: false, error: e.message }); }
       }
       if (req.method === 'POST' && urlPath === '/api/mcp') {
@@ -1072,7 +1183,7 @@ wss.on('connection', (ws) => {
     if (msg.type === 'input') {
       const data = typeof msg.data === 'string' ? msg.data : '';
       terminalInput = (terminalInput + data).slice(-10000);
-      if (/[\r\n\u0003]/.test(data)) flushPathNotes();
+      if (/[\r\n]/.test(data) || data.includes(String.fromCharCode(3))) flushPathNotes();
       if (ptyProc && data) ptyProc.write(data);
     }
     else if (msg.type === 'resize') {

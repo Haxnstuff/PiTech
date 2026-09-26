@@ -7,8 +7,15 @@ const { openBrowserHarness, wait } = require('./browser-harness.cjs');
 async function main() {
   const browser = await openBrowserHarness({ profilePrefix: 'pitech-fixes-', portStart: 10400, portEnd: 10700 });
   try {
-    const { evaluate } = browser;
-    await wait(2200);
+    const { evaluate, send } = browser;
+    const pressKey = async (key, code, windowsVirtualKeyCode, modifiers = 0) => {
+      await send('Input.dispatchKeyEvent', { type: 'keyDown', modifiers, key, code, windowsVirtualKeyCode });
+      await send('Input.dispatchKeyEvent', { type: 'keyUp', modifiers, key, code, windowsVirtualKeyCode });
+    };
+    for (let attempt = 0; attempt < 40; attempt++) {
+      if (await evaluate(`document.querySelectorAll('#file-root-select option').length > 0`)) break;
+      await wait(250);
+    }
     await evaluate(`document.getElementById('skills-btn')?.click()`);
     const initial = await evaluate(`(() => ({
       roots: [...document.querySelectorAll('#file-root-select option')].map((option) => option.value),
@@ -36,6 +43,50 @@ async function main() {
     assert.equal(initial.fileHeaderContext, 'filehead');
     assert.match(initial.pastSessionsHeader, /^Past Sessions/);
     assert.equal(initial.pathsFolder, true, 'Paths folder must be visible in the Pi workspace');
+
+    await evaluate(`(() => {
+      const originalFetch = window.fetch.bind(window);
+      window.__pitechMutationCalls = [];
+      window.fetch = (input, init = {}) => {
+        const url = typeof input === 'string' ? input : input?.url || '';
+        if (['/api/sessions/copy', '/api/fs/delete-batch', '/api/history/undo', '/api/history/redo'].includes(url)) {
+          let body = null;
+          try { body = JSON.parse(init.body || 'null'); } catch {}
+          window.__pitechMutationCalls.push({ url, body });
+          return Promise.resolve(new Response(JSON.stringify({ ok: true, copied: 1, changed: true, label: 'browser check' }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }));
+        }
+        return originalFetch(input, init);
+      };
+    })()`);
+
+    const dragPoints = await evaluate(`(() => {
+      const session = [...document.querySelectorAll('#conv-list .session-row[data-ctx="session"]')].find((row) => row.offsetParent !== null);
+      const project = [...document.querySelectorAll('#projects-list .project-row')].find((row) => row.offsetParent !== null);
+      if (!session || !project) return null;
+      const a = session.getBoundingClientRect();
+      const b = project.getBoundingClientRect();
+      return { from: { x: a.left + a.width / 2, y: a.top + a.height / 2 }, to: { x: b.left + b.width / 2, y: b.top + 8 } };
+    })()`);
+    assert.ok(dragPoints, 'a past session and project must be visible for drag verification');
+    await send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...dragPoints.from });
+    await send('Input.dispatchMouseEvent', { type: 'mousePressed', ...dragPoints.from, button: 'left', buttons: 1, clickCount: 1 });
+    for (let step = 1; step <= 12; step++) {
+      const ratio = step / 12;
+      await send('Input.dispatchMouseEvent', {
+        type: 'mouseMoved',
+        x: dragPoints.from.x + (dragPoints.to.x - dragPoints.from.x) * ratio,
+        y: dragPoints.from.y + (dragPoints.to.y - dragPoints.from.y) * ratio,
+        button: 'left',
+        buttons: 1,
+      });
+    }
+    await send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...dragPoints.to, button: 'left', buttons: 0, clickCount: 1 });
+    await wait(200);
+    const dragCall = await evaluate(`window.__pitechMutationCalls.find((call) => call.url === '/api/sessions/copy') || null`);
+    assert.ok(dragCall?.body?.src, 'dragging a past session into a project must issue a copy request');
 
     const sessionSelection = await evaluate(`(() => {
       const rows = [...document.querySelectorAll('#conv-list .session-row[data-ctx="session"]')]
@@ -95,6 +146,61 @@ async function main() {
     assert.match(fileMenu, /Rename selected/);
     await evaluate(`document.getElementById('ctx-menu')?.classList.add('hidden')`);
 
+    await pressKey('Delete', 'Delete', 46);
+    const deletePrompt = await evaluate(`({
+      visible: !document.getElementById('confirm-modal')?.classList.contains('hidden'),
+      title: document.getElementById('confirm-title')?.textContent || '',
+    })`);
+    assert.equal(deletePrompt.visible, true, 'Delete must open one confirmation for highlighted files');
+    assert.match(deletePrompt.title, /2 selected items/);
+    await evaluate(`document.getElementById('confirm-ok')?.click()`);
+    await wait(100);
+    const deleteCall = await evaluate(`window.__pitechMutationCalls.find((call) => call.url === '/api/fs/delete-batch') || null`);
+    assert.equal(deleteCall?.body?.paths?.length, 2, 'highlighted files must be submitted as one grouped delete');
+
+    await evaluate(`window.__pitechMutationCalls.length = 0; document.activeElement?.blur()`);
+    await pressKey('z', 'KeyZ', 90, 2);
+    await pressKey('y', 'KeyY', 89, 2);
+    await pressKey('Z', 'KeyZ', 90, 10);
+    const historyCalls = await evaluate(`window.__pitechMutationCalls.map((call) => call.url)`);
+    assert.deepEqual(historyCalls, ['/api/history/undo', '/api/history/redo', '/api/history/redo']);
+
+    await evaluate(`(() => {
+      document.getElementById('notepad-btn')?.click();
+      const input = document.getElementById('notepad-textarea');
+      input.value = 'native';
+      input.focus();
+      input.setSelectionRange(input.value.length, input.value.length);
+      window.__pitechMutationCalls.length = 0;
+    })()`);
+    await send('Input.insertText', { text: ' edit' });
+    await pressKey('z', 'KeyZ', 90, 2);
+    assert.equal(await evaluate(`document.getElementById('notepad-textarea').value`), 'native', 'Ctrl+Z must remain native inside text editors');
+    await pressKey('Z', 'KeyZ', 90, 10);
+    assert.equal(await evaluate(`document.getElementById('notepad-textarea').value`), 'native edit', 'Ctrl+Shift+Z must remain native inside text editors');
+    await pressKey('z', 'KeyZ', 90, 2);
+    await pressKey('y', 'KeyY', 89, 2);
+    assert.equal(await evaluate(`document.getElementById('notepad-textarea').value`), 'native edit', 'Ctrl+Y must remain native inside text editors');
+    await evaluate(`document.getElementById('notepad-textarea').setSelectionRange(0, 6)`);
+    await pressKey('Delete', 'Delete', 46);
+    assert.equal(await evaluate(`document.getElementById('notepad-textarea').value`), ' edit', 'Delete must remain native inside text editors');
+    assert.deepEqual(await evaluate(`window.__pitechMutationCalls.map((call) => call.url)`), [], 'native text shortcuts and Delete must not call workspace history');
+
+    await evaluate(`(() => {
+      const editable = document.createElement('div');
+      editable.id = 'browser-contenteditable';
+      editable.contentEditable = 'plaintext-only';
+      editable.textContent = 'editable';
+      document.body.append(editable);
+      editable.focus();
+      window.__pitechMutationCalls.length = 0;
+    })()`);
+    await pressKey('z', 'KeyZ', 90, 2);
+    await pressKey('Z', 'KeyZ', 90, 10);
+    await pressKey('Delete', 'Delete', 46);
+    assert.deepEqual(await evaluate(`window.__pitechMutationCalls.map((call) => call.url)`), [], 'inherited and plaintext-only contenteditable controls must keep native history and Delete');
+    await evaluate(`document.getElementById('browser-contenteditable')?.remove()`);
+
     const spellMenu = await evaluate(`(() => {
       const input = document.getElementById('notepad-textarea');
       input.value = 'mispelled example';
@@ -133,6 +239,7 @@ async function main() {
     assert.equal(await evaluate(`document.querySelector('#session-body .file-view')?.textContent.includes('registerPiWebui')`), true);
     await evaluate(`document.querySelector('#session-body button')?.click()`);
     assert.equal(await evaluate(`!!document.querySelector('#session-body textarea.file-edit')`), true, 'Pi files must be editable in-browser');
+    assert.deepEqual(browser.jsErrors, [], `browser errors: ${browser.jsErrors.join('\n')}`);
     console.log('PiTech fix browser checks passed');
   } finally {
     await browser.close();

@@ -2,7 +2,7 @@
 // Shared "Projects" logic for pi-webui (used by both the webUI server and the
 // pi extension at ~/.pi/agent/extensions/pi-webui.ts). Projects are folders
 // under ~/.pi/agent/projects/ that collect past sessions for context.
-import { promises as fs } from "fs";
+import { constants, promises as fs } from "fs";
 import path from "path";
 import os from "os";
 
@@ -51,13 +51,19 @@ export async function newProject(name) {
 export async function addSessionToProject(project, srcFile) {
   const proj = await newProject(project);
   const dst = path.join(proj.dir, "sessions", path.basename(srcFile));
-  await fs.copyFile(srcFile, dst);
-  await fs.appendFile(
-    proj.manifest,
-    `- ${path.basename(srcFile)} (added ${new Date().toISOString()})\n`,
-    "utf8"
-  );
-  return { name: proj.name, dst };
+  await fs.copyFile(srcFile, dst, constants.COPYFILE_EXCL);
+  try {
+    await fs.appendFile(
+      proj.manifest,
+      `- ${path.basename(srcFile)} (added ${new Date().toISOString()})\n`,
+      "utf8"
+    );
+    return { name: proj.name, dst };
+  } catch (error) {
+    try { await fs.rm(dst, { force: true }); }
+    catch (cleanupError) { throw new AggregateError([error, cleanupError], "manifest append and copy cleanup both failed"); }
+    throw error;
+  }
 }
 
 // Session display title: /name if set, else the first user message.
