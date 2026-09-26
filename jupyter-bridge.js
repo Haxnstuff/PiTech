@@ -10,6 +10,7 @@
 
 const { spawn, spawnSync } = require('child_process');
 const crypto = require('crypto');
+const path = require('path');
 const http = require('http');
 const WebSocket = require('ws');
 
@@ -142,8 +143,11 @@ function createJupyterBridge({ log = () => {} } = {}) {
       for (const ws of state.upstreams) { try { ws.close(); } catch {} }
       state.upstreams.clear();
       try {
-        if (process.platform === 'win32') spawnSync('taskkill', ['/PID', String(p.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
-        else p.kill('SIGKILL');
+        if (process.platform === 'win32') {
+          // Absolute System32 path: Sonar S4036 — don't rely on PATH lookup
+          const taskkill = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'taskkill.exe');
+          spawnSync(taskkill, ['/PID', String(p.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
+        } else p.kill('SIGKILL');
       } catch {}
       log('[pi-webui] jupyter server stopped');
     }
