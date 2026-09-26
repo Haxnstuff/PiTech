@@ -37,7 +37,13 @@ async function main() {
     await send('Runtime.enable');
     await send('Network.enable');
     await send('Log.enable');
-    await wait(2200);
+    // wait for the app to actually load (fixed waits are flaky under load)
+    for (let i = 0; i < 40; i++) {
+      const ready = await evaluate(`location.href.startsWith('http') && !!document.getElementById('notepad-btn') && !!document.getElementById('notepad-panel')`);
+      if (ready) break;
+      await wait(250);
+    }
+    await wait(800);
 
     const initial = await evaluate(`(() => {
       const button = document.getElementById('notepad-btn');

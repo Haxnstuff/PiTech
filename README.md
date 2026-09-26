@@ -19,7 +19,7 @@ Run this once in PowerShell:
 git clone https://github.com/Haxnstuff/PiTech.git "$HOME\PiTech"; Set-Location "$HOME\PiTech"; npm run setup
 ```
 
-The setup command installs dependencies, vendors xterm.js, installs the PiTech bridge into `~/.pi/agent/`, detects PowerShell and `pi`, writes the local configuration, adds a hidden startup shortcut, launches PiTech, and opens `http://127.0.0.1:8787`.
+The setup command installs dependencies, vendors xterm.js, installs the PiTech bridge into `~/.pi/agent/`, detects PowerShell and `pi`, scopes PiTech to every authenticated model, writes the local configuration, adds a hidden startup shortcut, launches PiTech, and opens `http://127.0.0.1:8787`.
 
 Restart pi or run `/reload` after the first installation so pi loads the PiTech extension.
 
@@ -49,6 +49,7 @@ Setup installs:
 
 - `pi/extensions/pi-webui.ts` → `~/.pi/agent/extensions/pi-webui.ts`
 - `pi/scripts/projects.mjs` → `~/.pi/agent/scripts/projects.mjs`
+- `pi/scripts/openrouter-catalog.mjs` → `~/.pi/agent/scripts/openrouter-catalog.mjs`
 
 The extension provides:
 
@@ -59,7 +60,7 @@ The extension provides:
 /project off           Leave the active project
 ```
 
-It also updates `~/.pi/agent/webui-state.json` so the skills sidebar can show which skills are active in the current prompt.
+It also refreshes the authenticated OpenRouter `/api/v1/models` catalog and updates `~/.pi/agent/webui-state.json` so the skills sidebar can show which skills are active in the current prompt.
 
 ## Update
 
@@ -97,7 +98,7 @@ Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*PiTech*ser
 
 1. Remove `pi WebUI.lnk` from `shell:startup`.
 2. Delete `$HOME\PiTech`.
-3. Optionally delete `~/.pi/agent/extensions/pi-webui.ts` and `~/.pi/agent/scripts/projects.mjs`.
+3. Optionally delete `~/.pi/agent/extensions/pi-webui.ts`, `~/.pi/agent/scripts/projects.mjs`, and `~/.pi/agent/scripts/openrouter-catalog.mjs`.
 
 ## Firefox clipboard setup
 

@@ -11,6 +11,7 @@ import { homedir } from "node:os";
 import { access, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import { appendPaths, extractPaths, pathNotesPath } from "../scripts/path-notes.js";
+import { refreshOpenRouterCatalog } from "../scripts/openrouter-catalog.mjs";
 
 const AGENT = join(homedir(), ".pi", "agent");
 const STATE_FILE = process.env.PITECH_STATE_FILE || join(AGENT, "webui-state.json");
@@ -85,6 +86,10 @@ async function loadProjectContext(name: string, currentSessionFile?: string) {
 }
 
 export default async function registerPiWebui(pi: ExtensionAPI) {
+  pi.registerProvider("openrouter", {
+    refreshModels: (context) => refreshOpenRouterCatalog(context),
+  });
+
   let activeProject = await readActiveProject();
   let projectContext = "";
   let projectSessionCount = 0;

@@ -11,11 +11,11 @@ const read = (file) => fs.readFileSync(path.join(root, file), 'utf8');
 const pkg = JSON.parse(read('package.json'));
 assert.equal(pkg.name, 'pitech');
 assert.equal(pkg.author, 'Haxnstuff');
-assert.equal(pkg.version, '1.1.2');
+assert.equal(pkg.version, '2.0.0');
 assert.equal(pkg.license, 'MIT');
 assert.equal(pkg.repository?.url, 'https://github.com/Haxnstuff/PiTech.git');
-assert.equal(pkg.scripts?.test, 'node --test tests/clipboard.test.cjs tests/conversations.test.cjs tests/conversation-organizer.test.cjs tests/path-notes.test.cjs tests/file-tree.test.cjs tests/project-context.test.mjs && node tests/release.test.cjs');
-assert.equal(pkg.scripts?.['test:browser'], 'node tests/clipboard-browser.cjs && node tests/notepad-browser.cjs && node tests/conversation-api.test.cjs && node tests/fixes-browser.cjs');
+assert.equal(pkg.scripts?.test, 'node --test tests/clipboard.test.cjs tests/conversations.test.cjs tests/conversation-organizer.test.cjs tests/path-notes.test.cjs tests/file-tree.test.cjs tests/project-context.test.mjs tests/openrouter-catalog.test.mjs tests/jupyter.test.cjs tests/langexec.test.cjs && node tests/release.test.cjs');
+assert.equal(pkg.scripts?.['test:browser'], 'node tests/clipboard-browser.cjs && node tests/notepad-browser.cjs && node tests/jupyter-browser.cjs && node tests/jupyter-langs-browser.cjs && node tests/conversation-api.test.cjs && node tests/fixes-browser.cjs');
 
 const ignored = read('.gitignore');
 for (const entry of ['node_modules/', 'config.json', 'server.log', 'public/vendor/', 'chrome-test-profile/']) {
@@ -25,10 +25,13 @@ for (const entry of ['node_modules/', 'config.json', 'server.log', 'public/vendo
 const setup = read('setup.js');
 assert.match(setup, /pi[\\/',\s]+extensions[\\/',\s]+pi-webui\.ts/s);
 assert.match(setup, /pi[\\/',\s]+scripts[\\/',\s]+projects\.mjs/s);
+assert.match(setup, /pi[\\/',\s]+scripts[\\/',\s]+openrouter-catalog\.mjs/s);
 assert.match(setup, /agentDir\s*=\s*path\.join\(os\.homedir\(\), '\.pi', 'agent'\)/);
 assert.match(setup, /path\.join\(agentDir, 'extensions', 'pi-webui\.ts'\)/);
 assert.match(setup, /path\.join\(agentDir, 'scripts', 'path-notes\.js'\)/);
 assert.doesNotMatch(setup, /path\.join\(agentDir, 'extensions', 'path-notes\.js'\)/);
+assert.match(setup, /--models '\*\*'/);
+assert.doesNotMatch(setup, /patchPiModelCommand|findPiPackageDir/);
 
 const readme = read('README.md');
 assert.match(readme, /git clone https:\/\/github\.com\/Haxnstuff\/PiTech\.git/);
@@ -44,6 +47,11 @@ for (const id of ['glow-blur', 'glow-density', 'glow-pop', 'glow-color']) {
 for (const id of ['notepad-btn', 'notepad-panel', 'notepad-head', 'notepad-tab-list', 'notepad-textarea', 'notepad-new-tab', 'notepad-rename', 'notepad-resize', 'file-root-select']) {
   assert.match(html, new RegExp(`id="${id}"`), `notepad must expose ${id}`);
 }
+for (const id of ['jupyter-btn', 'jupyter-panel', 'jupyter-head', 'jupyter-tab-list', 'jupyter-body', 'jupyter-new-tab', 'jupyter-rename', 'jupyter-resize', 'jupyter-lang', 'jupyter-restart-kernel']) {
+  assert.match(html, new RegExp(`id="${id}"`), `jupyter panel must expose ${id}`);
+}
+assert.match(html, /id="notepad-btn"[\s\S]*id="jupyter-btn"/);
+assert.match(html, /<script src="jupyter\.js"><\/script>/);
 assert.match(html, /id="new-project-btn"[\s\S]*id="notepad-btn"/);
 assert.match(html, /id="new-session"[\s\S]*id="skills-btn"[\s\S]*id="mcp-btn"/);
 for (const id of ['skills-panel', 'skills-head', 'skills-close', 'skills-resize', 'file-tree', 'file-root-name', 'file-root-select']) {
@@ -92,6 +100,8 @@ assert.match(extension, /pi\.on\("input"/);
 assert.match(extension, /skillFiles/);
 assert.match(extension, /PITECH_STATE_FILE/);
 assert.match(extension, /\.\.\/scripts\/path-notes\.js/);
+assert.match(extension, /\.\.\/scripts\/openrouter-catalog\.mjs/);
+assert.match(extension, /registerProvider\("openrouter"/);
 assert.match(extension, /extractPaths/);
 assert.match(extension, /appendPaths/);
 assert.match(extension, /event\.prompt/);
@@ -139,6 +149,7 @@ for (const file of [
   'pi/extensions/pi-webui.ts',
   'pi/scripts/path-notes.js',
   'pi/scripts/projects.mjs',
+  'pi/scripts/openrouter-catalog.mjs',
 ]) {
   const head = read(file).split(/\r?\n/).slice(0, 5).join('\n');
   assert.match(head, /Haxnstuff/, `${file} must be signed by Haxnstuff`);
