@@ -45,12 +45,13 @@ const piCopies = [
   ['pi/extensions/pi-webui.ts', path.join(agentDir, 'extensions', 'pi-webui.ts')],
   ['pi/scripts/path-notes.js', path.join(agentDir, 'scripts', 'path-notes.js')],
   ['pi/scripts/projects.mjs', path.join(agentDir, 'scripts', 'projects.mjs')],
+  ['pi/scripts/openrouter-catalog.mjs', path.join(agentDir, 'scripts', 'openrouter-catalog.mjs')],
 ];
 for (const [src, dst] of piCopies) {
   fs.mkdirSync(path.dirname(dst), { recursive: true });
   fs.copyFileSync(path.join(ROOT, src), dst);
 }
-console.log('  installed extension/pi-webui.ts, scripts/path-notes.js and scripts/projects.mjs');
+console.log('  installed extension/pi-webui.ts, scripts/path-notes.js, scripts/projects.mjs and scripts/openrouter-catalog.mjs');
 
 // 4) detect shell + pi command
 console.log('== Detecting shell and pi ==');
@@ -72,8 +73,8 @@ if (win) {
 }
 const isPs = /pwsh|powershell/i.test(shell);
 const shellArgs = isPs
-  ? ['-NoLogo', '-NoExit', '-Command', `& '${piCmd.replace(/'/g, "''")}'`]
-  : ['-lc', piCmd];
+  ? ['-NoLogo', '-NoExit', '-Command', `& '${piCmd.replace(/'/g, "''")}' --models '**'`]
+  : ['-lc', `${piCmd} --models '**'`];
 
 const config = {
   port: 8787,
@@ -87,6 +88,7 @@ const config = {
 fs.writeFileSync(path.join(ROOT, 'config.json'), JSON.stringify(config, null, 2));
 console.log(`  shell: ${shell}`);
 console.log(`  pi:    ${piCmd}`);
+console.log("  model scope: all authenticated models");
 console.log('  config.json written');
 
 // 5) startup shortcut (logon autostart, hidden via wscript)

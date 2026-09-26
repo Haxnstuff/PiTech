@@ -24,6 +24,10 @@ const {
   serializeConversationMeta,
 } = require('./conversation-meta');
 const { appendPaths, pathNotesPath } = require('./pi/scripts/path-notes');
+const { createJupyterBridge, JUPYTER_INSTALL_URL } = require('./jupyter-bridge');
+const { langCheck, langRun } = require('./langexec');
+
+const jupyterBridge = createJupyterBridge({ log: (m) => console.log(m) });
 const { createFileHistory } = require('./file-history');
 const { isWithinRealRoot, samePath } = require('./safe-path');
 
@@ -51,7 +55,8 @@ const config = Object.assign(
     bufferKb: 256,
     openBrowser: process.env.PI_NO_OPEN !== '1',
   },
-  fileConfig
+  fileConfig,
+  { port: Number(process.env.PI_WEBUI_PORT) || fileConfig.port || 8787 }
 );
 
 // ---------------- shared projects lib ----------------
@@ -1093,6 +1098,46 @@ const server = http.createServer(async (req, res) => {
           return sendJson(res, 200, { ok: true, enabled });
         } catch (e) { return sendJson(res, 500, { ok: false, error: e.message }); }
       }
+      // ---------------- Jupyter panel ----------------
+      if (urlPath === '/api/jupyter/status') {
+        return sendJson(res, 200, { ok: true, installUrl: JUPYTER_INSTALL_URL, ...jupyterBridge.status() });
+      }
+      if (req.method === 'POST' && urlPath === '/api/jupyter/start') {
+        try {
+          await jupyterBridge.start();
+          return sendJson(res, 200, { ok: true, ...jupyterBridge.status() });
+        } catch (e) {
+          return sendJson(res, 502, { ok: false, error: e.message });
+        }
+      }
+      if (req.method === 'POST' && urlPath === '/api/jupyter/stop') {
+        jupyterBridge.stop();
+        return sendJson(res, 200, { ok: true, ...jupyterBridge.status() });
+      }
+      if (urlPath.startsWith('/api/jupyter/')) {
+        const parts = urlPath.split('/').filter(Boolean); // ['api','jupyter', ...]
+        const method = req.method;
+        let body = null;
+        if (method === 'POST') body = await readBody(req);
+        let action;
+        if (parts[2] === 'kernelspecs' && method === 'GET') action = 'kernelspecs';
+        else if (parts[2] === 'kernels' && parts.length === 3) action = 'kernels';
+        else if (parts[2] === 'kernels' && parts.length === 4) action = 'kernel/' + parts[3];
+        if (!action) return sendJson(res, 404, { ok: false, error: 'not found' });
+        const result = await jupyterBridge.api(method, action, body);
+        return sendJson(res, result.status, { ok: result.status < 400, ...(result.json || { error: 'upstream error' }) });
+      }
+      // ---------------- language exec (non-Python panel languages) --------
+      if (urlPath === '/api/lang/check' && req.method === 'POST') {
+        const body = await readBody(req);
+        return sendJson(res, 200, { ok: true, ...langCheck(String(body.lang || '')) });
+      }
+      if (urlPath === '/api/lang/run' && req.method === 'POST') {
+        const body = await readBody(req);
+        if (typeof body.code !== 'string' || body.code.length > 200000) return sendJson(res, 400, { ok: false, error: 'bad code payload' });
+        const result = await langRun(String(body.lang || ''), body.code);
+        return sendJson(res, 200, result);
+      }
       return sendJson(res, 404, { ok: false, error: 'not found' });
     } catch (e) {
       return sendJson(res, 500, { ok: false, error: e.message });
@@ -1112,7 +1157,16 @@ const server = http.createServer(async (req, res) => {
   });
 });
 
-const wss = new WebSocket.Server({ server, path: '/ws' });
+// Route terminal WS (/ws) and Jupyter kernel channel WS (/jupyter-ws/:id).
+const wss = new WebSocket.Server({ noServer: true });
+const jupyterWss = new WebSocket.Server({ noServer: true });
+server.on('upgrade', (req, socket, head) => {
+  const urlPath = (req.url || '/').split('?')[0];
+  if (urlPath === '/ws') return wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
+  const m = /^\/jupyter-ws\/([^/]+)$/.exec(urlPath);
+  if (m) return jupyterWss.handleUpgrade(req, socket, head, (ws) => jupyterBridge.proxyChannel(decodeURIComponent(m[1]), ws));
+  socket.destroy();
+});
 wss.on('connection', (ws) => {
   let terminalInput = '';
   const flushPathNotes = () => {

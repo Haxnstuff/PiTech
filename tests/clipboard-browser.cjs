@@ -13,7 +13,12 @@ async function main() {
     await send('Log.enable');
     await send('Browser.setPermission', { origin: appUrl, permission: { name: 'clipboardReadWrite' }, setting: 'granted' });
     await send('Browser.setPermission', { origin: appUrl, permission: { name: 'clipboardSanitizedWrite' }, setting: 'granted' });
-    await wait(2500);
+    for (let i = 0; i < 40; i++) {
+      const ready = await evaluate(`location.href.startsWith('http') && !!document.getElementById('notepad-btn')`);
+      if (ready) break;
+      await wait(250);
+    }
+    await wait(800);
 
     await evaluate(`(() => {
       const input = document.createElement('input');

@@ -16,6 +16,7 @@
     <div class="divider" aria-hidden="true"></div>
     <button class="btn" id="new-project-btn" title="Create a project folder that collects past sessions">New Project</button>
     <button class="btn" id="notepad-btn" title="Open a UI-only scratchpad">Notepad</button>
+    <button class="btn" id="jupyter-btn" title="Open a mini Jupyter Notebook panel">Jupyter</button>
 
     <div class="header-signature" aria-hidden="true">HAXNSTUFF</div>
     <div class="spacer"></div>
@@ -128,6 +129,31 @@
     <textarea id="notepad-textarea" class="notepad-textarea" placeholder="Write a note…" aria-label="Notepad text" spellcheck="true"></textarea>
     <div class="notepad-foot">UI only &middot; saved locally</div>
     <div class="session-resize" id="notepad-resize" title="Drag to resize"></div>
+  </dialog>
+
+  <!-- Jupyter panel (moveable + resizable, runs a real local kernel) -->
+  <dialog id="jupyter-panel" class="notepad-panel jupyter-panel hidden" aria-label="Jupyter" open>
+    <div class="notepad-head" id="jupyter-head" title="Drag to move">
+      <span class="notepad-title">Jupyter</span>
+      <div class="notepad-actions">
+        <select id="jupyter-lang" class="jupyter-select" title="Code language" aria-label="Code language"></select>
+        <button class="icon-btn" id="jupyter-rename" title="Rename current notebook" aria-label="Rename current notebook">✎</button>
+        <button class="icon-btn" id="jupyter-close" title="Close" aria-label="Close">&times;</button>
+      </div>
+    </div>
+    <div class="notepad-tabs">
+      <div class="notepad-tab-list" id="jupyter-tab-list" role="tablist" aria-label="Jupyter notebooks"></div>
+      <button class="notepad-new-tab" id="jupyter-new-tab" title="New notebook" aria-label="New notebook">+</button>
+    </div>
+    <div class="jupyter-body" id="jupyter-body"></div>
+    <div class="notepad-foot jupyter-foot">
+      <span class="jupyter-kdot" id="jupyter-kdot" title="Kernel state"></span>
+      <span id="jupyter-kstatus">kernel: off</span>
+      <span class="jupyter-flex"></span>
+      <button class="icon-btn" id="jupyter-restart-kernel" title="Restart kernel (clears kernel state, keeps cells)">↻</button>
+      <span class="jupyter-foot-note">saved locally</span>
+    </div>
+    <div class="session-resize" id="jupyter-resize" title="Drag to resize"></div>
   </dialog>
 
   <!-- Settings panel (moveable + resizable) -->
@@ -285,6 +311,7 @@
   <script src="vendor/xterm.js"></script>
   <script src="vendor/addon-fit.js"></script>
   <script src="clipboard.js"></script>
+  <script src="jupyter.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

@@ -640,6 +640,157 @@ body.resizing * { cursor: col-resize !important; }
   font-size: 10px;
 }
 
+/* ---------- Jupyter panel ---------- */
+.jupyter-panel { width: 560px; height: 460px; }
+.jupyter-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  background: var(--term-bg);
+  padding: 8px 10px;
+  scrollbar-width: thin;
+}
+.jupyter-select {
+  height: 22px;
+  border: 1px solid var(--border-hi);
+  border-radius: 6px;
+  background: var(--term-bg);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  padding: 0 4px;
+}
+.jupyter-cell { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px; overflow: hidden; }
+.jupyter-cell:focus-within { border-color: var(--accent); }
+.jupyter-cell-row { display: flex; align-items: stretch; background: var(--term-bg); }
+.jupyter-gutter {
+  flex: none;
+  width: 40px;
+  padding: 6px 0;
+  text-align: right;
+  color: var(--dim);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.45;
+  background: color-mix(in srgb, var(--panel) 55%, var(--term-bg));
+  border-right: 1px solid var(--border);
+  user-select: none;
+  overflow: hidden;
+}
+.jupyter-gutter span { display: block; padding-right: 8px; }
+.jupyter-editor {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.jupyter-hl,
+.jupyter-input {
+  margin: 0;
+  padding: 6px 8px;
+  border: 0;
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+  white-space: pre;
+  word-break: normal;
+  overflow-wrap: normal;
+  tab-size: 4;
+}
+.jupyter-hl {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+.jupyter-input {
+  display: block;
+  position: relative;
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  background: transparent;
+  color: transparent;
+  caret-color: var(--text);
+  outline: none;
+  resize: none;
+  overflow: auto;
+  scrollbar-width: thin;
+}
+.jupyter-cell:not(:focus-within) .jupyter-input { color: transparent; }
+.jupyter-run {
+  flex: none;
+  width: 34px;
+  border: 0;
+  border-left: 1px solid var(--border);
+  background: transparent;
+  color: var(--ok);
+  font-size: 13px;
+  cursor: pointer;
+}
+.jupyter-run:hover { background: color-mix(in srgb, var(--ok) 12%, transparent); }
+.jupyter-run.running { color: var(--warn); animation: pulse 1s infinite; }
+@keyframes pulse { 50% { opacity: 0.45; } }
+.jupyter-cell-actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  border-left: 1px solid var(--border);
+}
+.jupyter-cell-actions .icon-btn { width: 24px; height: 100%; border-radius: 0; }
+.jupyter-out {
+  border-top: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg) 40%, var(--term-bg));
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+.jupyter-out:empty { display: none; }
+.jupyter-out .j-o {
+  padding: 6px 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text);
+}
+.jupyter-out .j-o.stderr { color: var(--err); }
+.jupyter-out .j-o.j-error { color: var(--err); background: color-mix(in srgb, var(--err) 8%, transparent); }
+.jupyter-out .j-o.j-label {
+  padding-bottom: 0;
+  color: var(--dim);
+  font-size: 10px;
+}
+.jupyter-out img { max-width: 100%; display: block; padding: 6px 10px; }
+.jupyter-out .j-preview { padding: 0; }
+.j-preview iframe { width: 100%; height: 220px; border: 0; background: #fff; display: block; }
+.jupyter-out .j-o.j-busy { color: var(--dim); font-style: italic; }
+.jupyter-newcell {
+  width: 100%;
+  border: 1px dashed var(--border-hi);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--dim);
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 6px;
+  cursor: pointer;
+}
+.jupyter-newcell:hover { color: var(--accent); border-color: var(--accent); }
+.jupyter-foot { display: flex; align-items: center; gap: 6px; font-size: 10.5px; }
+.jupyter-flex { flex: 1; }
+.jupyter-foot .icon-btn { width: 22px; height: 22px; }
+.jupyter-kdot { width: 8px; height: 8px; border-radius: 50%; background: var(--dim); flex: none; }
+.jupyter-kdot.on { background: var(--ok); }
+.jupyter-kdot.busy { background: var(--warn); }
+.jtk-comment { color: var(--dim); font-style: italic; }
+.jtk-string { color: var(--ok); }
+.jtk-keyword { color: var(--accent); font-weight: 600; }
+.jtk-number { color: var(--warn); }
+.jtk-fn { color: var(--logo-b); }
+.jupyter-empty-note { color: var(--dim); font-size: 11px; padding: 10px 4px; }
+
 .msg { margin-bottom: 14px; }
 .msg .m-head {
   font-size: 10px;

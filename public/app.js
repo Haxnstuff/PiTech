@@ -1090,6 +1090,7 @@
     if (e.key === 'Escape' && !mcpPanel.classList.contains('hidden')) closeMcp();
     if (e.key === 'Escape' && !sessPanel.classList.contains('hidden')) closeSessionPanel();
     if (e.key === 'Escape' && !notepadPanel.classList.contains('hidden')) closeNotepad();
+    if (e.key === 'Escape' && !jupyterPanel.classList.contains('hidden')) closeJupyter();
     if (e.key === 'Escape' && !npModal.classList.contains('hidden')) closeNp();
     if (e.key === 'Escape' && !$('confirm-modal').classList.contains('hidden')) $('confirm-cancel').click();
     if (e.key === 'Escape' && !$('prompt-modal').classList.contains('hidden')) $('prompt-cancel').click();
@@ -1147,7 +1148,7 @@
       document.addEventListener('mouseup', onUp);
     };
     head.addEventListener('mousedown', (e) => {
-      if (e.target.closest('button')) return;
+      if (e.target.closest('button, select')) return; // controls keep native behavior
       e.preventDefault();
       drag(e, 'move');
     });
@@ -1247,6 +1248,637 @@
     activeNotepad().content = notepadTextarea.value;
     saveNotepadState();
   });
+
+  // ---------------- Jupyter panel (mini notebook on a real local kernel) ------
+  const jupyterPanel = $('jupyter-panel');
+  const jupyterBody = $('jupyter-body');
+  const jupyterTabList = $('jupyter-tab-list');
+  const jupyterStatusEl = $('jupyter-kstatus');
+  const jupyterDotEl = $('jupyter-kdot');
+  const jupyterLangSel = $('jupyter-lang');
+  const JUPYTER_KEY = 'pi-jupyter';
+  const ANSI_RE = /\x1b\[[0-9;]*[A-Za-z]/g;
+  const OUT_TEXT_CAP = 20000; // per-output persistence cap
+  const OUT_IMG_CAP = 300 * 1024; // base64 chars persisted per image
+  let jupyterSaveWarned = false;
+  let jupyterInstallUrl = 'https://jupyter.org/install';
+  let jupyterSession = createNotepadId();
+  const jupyterKernels = new Map(); // notebookId -> { kernelId, ws, state: 'off'|'idle'|'busy' }
+  const cellMeta = new Map(); // cellId -> { outEl, runEl, execCount }
+
+  function createJupyterId() { return createNotepadId(); }
+  function loadJupyterState() {
+    let saved = null;
+    try { saved = JSON.parse(localStorage.getItem(JUPYTER_KEY) || 'null'); } catch {}
+    const notebooks = [];
+    const ids = new Set();
+    for (const raw of Array.isArray(saved?.notebooks) ? saved.notebooks : []) {
+      if (!raw || typeof raw !== 'object') continue;
+      const id = String(raw.id || '').trim();
+      if (!id || ids.has(id)) continue;
+      const cells = (Array.isArray(raw.cells) && raw.cells.length ? raw.cells : [{ id: createJupyterId(), code: '', outputs: [], execCount: null }])
+        .filter((c) => c && typeof c === 'object')
+        .map((c) => ({
+          id: String(c.id || createJupyterId()),
+          code: typeof c.code === 'string' ? c.code : '',
+          outputs: Array.isArray(c.outputs) ? c.outputs : [],
+          execCount: typeof c.execCount === 'number' ? c.execCount : null,
+        }));
+      notebooks.push({
+        id,
+        title: String(raw.title || '').trim() || `Notebook ${notebooks.length + 1}`,
+        lang: PiTechJupyter.isValidLanguage(raw.lang) ? raw.lang : PiTechJupyter.defaultLanguage(),
+        cells,
+      });
+      ids.add(id);
+    }
+    if (!notebooks.length) notebooks.push({ id: 'nb-1', title: 'Notebook 1', lang: 'python', cells: [{ id: 'cell-1', code: '', outputs: [], execCount: null }] });
+    const activeId = notebooks.some((nb) => nb.id === saved?.activeId) ? saved.activeId : notebooks[0].id;
+    return { activeId, notebooks };
+  }
+  let jupyterState = loadJupyterState();
+  function saveJupyterState() {
+    // ponytail: localStorage has no size guard beyond the toast; per-output caps
+    // above keep notebooks small — switch to IndexedDB if users hit the ceiling.
+    try {
+      localStorage.setItem(JUPYTER_KEY, JSON.stringify(jupyterState));
+    } catch {
+      if (!jupyterSaveWarned) {
+        jupyterSaveWarned = true;
+        showToast('Jupyter notebooks could not be saved locally');
+      }
+    }
+  }
+  function activeNotebook() {
+    return jupyterState.notebooks.find((nb) => nb.id === jupyterState.activeId) || jupyterState.notebooks[0];
+  }
+  function setKernelState(nbId, state, label) {
+    const nb = jupyterState.notebooks.find((n) => n.id === nbId);
+    if (!nb || nb.id !== jupyterState.activeId) return;
+    jupyterDotEl.className = 'jupyter-kdot' + (state === 'busy' ? ' busy' : state === 'idle' ? ' on' : '');
+    jupyterStatusEl.textContent = label || `kernel: ${state}`;
+  }
+
+  // ---- kernel channels ------------------------------------------------------
+  function dropKernel(nbId, quiet) {
+    const k = jupyterKernels.get(nbId);
+    if (!k) return Promise.resolve();
+    jupyterKernels.delete(nbId);
+    const { ws, kernelId } = k;
+    try { ws.onclose = null; ws.close(); } catch {}
+    return fetch(`/api/jupyter/kernels/${encodeURIComponent(kernelId)}`, { method: 'DELETE' }).catch(() => {});
+  }
+  function wsBase() {
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    return `${proto}//${location.host}`;
+  }
+  function sendExecute(nbId, code, onOutput, onDone) {
+    const k = jupyterKernels.get(nbId);
+    if (!k || k.state === 'dead') return false;
+    const msgId = createJupyterId();
+    const msg = {
+      channel: 'shell',
+      header: { msg_id: msgId, username: 'pitech', session: jupyterSession, msg_type: 'execute_request', version: '5.3', date: new Date().toISOString() },
+      parent_header: {},
+      metadata: {},
+      content: { code, silent: false, store_history: true, user_expressions: {}, allow_stdin: false, stop_on_error: true },
+      buffers: [],
+    };
+    k.pendingMsgId = msgId;
+    k.onOutput = onOutput;
+    k.onDone = onDone;
+    try {
+      k.ws.send(JSON.stringify(msg));
+    } catch {
+      return false;
+    }
+    return true;
+  }
+  function handleKernelMessage(nbId, msg) {
+    const k = jupyterKernels.get(nbId);
+    if (!k) return;
+    if (msg.channel === 'iopub') {
+      const mine = msg.parent_header?.msg_id === k.pendingMsgId;
+      const type = msg.header?.msg_type;
+      const c = msg.content || {};
+      if (type === 'status') {
+        const st = c.execution_state;
+        if (st === 'busy') { k.state = 'busy'; showBusyFor(nbId, true); }
+        else if (st === 'idle') {
+          if (mine || !k.pendingMsgId) {
+            k.state = 'idle';
+            const done = k.onDone;
+            k.onOutput = null; k.onDone = null; k.pendingMsgId = null;
+            showBusyFor(nbId, false);
+            done?.();
+          }
+        }
+        return;
+      }
+      if (!mine) return;
+      if (type === 'stream') {
+        k.onOutput?.({ type: 'stream', name: c.name, text: c.text });
+      } else if (type === 'execute_input') {
+        k.onOutput?.({ type: 'exec', count: c.execution_count });
+      } else if (type === 'execute_result' || type === 'display_data') {
+        const data = c.data || {};
+        if (data['image/png']) k.onOutput?.({ type: 'image', png: data['image/png'], label: type === 'execute_result' ? c.execution_count : null });
+        else if (data['text/html'] && !data['text/plain']) k.onOutput?.({ type: 'html', text: String(data['text/html']).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim() });
+        else if (data['text/plain']) k.onOutput?.({ type: 'result', text: String(data['text/plain']), label: c.execution_count });
+      } else if (type === 'error') {
+        const tb = Array.isArray(c.traceback) ? c.traceback : [];
+        k.onOutput?.({ type: 'error', text: `${c.ename || 'Error'}: ${c.evalue || ''}\n${tb.join('\n').replace(ANSI_RE, '')}`.trim() });
+      }
+    }
+  }
+  function showBusyFor(nbId, busy) {
+    if (nbId === jupyterState.activeId) setKernelState(nbId, busy ? 'busy' : 'idle');
+  }
+  function connectKernel(nbId, kernelId) {
+    return new Promise((resolve) => {
+      const ws = new WebSocket(`${wsBase()}/jupyter-ws/${encodeURIComponent(kernelId)}`);
+      const k = jupyterKernels.get(nbId);
+      if (k) { k.ws = ws; }
+      ws.onopen = () => resolve(true);
+      ws.onmessage = (ev) => {
+        let msg;
+        try { msg = JSON.parse(ev.data); } catch { return; }
+        handleKernelMessage(nbId, msg);
+      };
+      ws.onclose = () => {
+        const cur = jupyterKernels.get(nbId);
+        if (cur?.ws === ws) {
+          cur.ws = null;
+          cur.state = 'off';
+          if (nbId === jupyterState.activeId) setKernelState(nbId, 'off', 'kernel: lost');
+        }
+      };
+      setTimeout(() => resolve(ws.readyState === WebSocket.OPEN), 8000);
+    });
+  }
+  async function ensureKernel(nbId) {
+    let k = jupyterKernels.get(nbId);
+    if (k && k.ws && k.ws.readyState === WebSocket.OPEN) return k;
+    if (k?.ws) { try { k.ws.close(); } catch {} }
+    jupyterKernels.delete(nbId);
+    const r = await fetch('/api/jupyter/start', { method: 'POST' });
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || 'could not start jupyter');
+    const kr = await fetch('/api/jupyter/kernels', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    const kj = await kr.json();
+    if (!kj.ok) throw new Error(kj.error || 'could not start kernel');
+    k = { kernelId: kj.id, ws: null, state: 'idle', onOutput: null, onDone: null, pendingMsgId: null };
+    jupyterKernels.set(nbId, k);
+    await connectKernel(nbId, kj.id);
+    return k;
+  }
+
+  // ---- rendering ------------------------------------------------------------
+  function renderJupyter() {
+    const nb = activeNotebook();
+    renderJupyterTabs();
+    jupyterLangSel.value = nb.lang;
+    jupyterBody.replaceChildren();
+    cellMeta.clear();
+    for (const cell of nb.cells) jupyterBody.appendChild(buildCell(nb, cell));
+    const add = document.createElement('button');
+    add.type = 'button';
+    add.className = 'jupyter-newcell';
+    add.textContent = '+ add cell';
+    add.addEventListener('click', () => {
+      const cell = { id: createJupyterId(), code: '', outputs: [], execCount: null };
+      nb.cells.push(cell);
+      saveJupyterState();
+      jupyterBody.insertBefore(buildCell(nb, cell), add);
+      jupyterBody.querySelector(`[data-cell-id="${cell.id}"] textarea`)?.focus();
+    });
+    jupyterBody.appendChild(add);
+    const k = jupyterKernels.get(nb.id);
+    setKernelState(nb.id, k ? (k.state === 'busy' ? 'busy' : k.ws ? 'idle' : 'off') : 'off', k ? undefined : 'kernel: off');
+  }
+  function renderJupyterTabs() {
+    const nb = activeNotebook();
+    jupyterTabList.replaceChildren();
+    for (const n of jupyterState.notebooks) {
+      const tab = document.createElement('button');
+      tab.type = 'button';
+      tab.className = 'notepad-tab' + (n.id === nb.id ? ' active' : '');
+      tab.setAttribute('role', 'tab');
+      tab.setAttribute('aria-selected', String(n.id === nb.id));
+      tab.dataset.ctx = 'jupyter-tab';
+      tab.dataset.id = n.id;
+      tab.dataset.name = n.title;
+      tab.title = n.title;
+      tab.textContent = n.title;
+      tab.addEventListener('click', () => selectJupyter(n.id));
+      jupyterTabList.appendChild(tab);
+    }
+  }
+  function buildCell(nb, cell) {
+    const box = document.createElement('div');
+    box.className = 'jupyter-cell';
+    box.dataset.cellId = cell.id;
+
+    const row = document.createElement('div');
+    row.className = 'jupyter-cell-row';
+    const gutter = document.createElement('div');
+    gutter.className = 'jupyter-gutter';
+    const editor = document.createElement('div');
+    editor.className = 'jupyter-editor';
+    const hl = document.createElement('pre');
+    hl.className = 'jupyter-hl'; hl.setAttribute('aria-hidden', 'true');
+    const ta = document.createElement('textarea');
+    ta.className = 'jupyter-input';
+    ta.spellcheck = false;
+    ta.setAttribute('aria-label', 'Code cell');
+    ta.value = cell.code;
+    editor.append(hl, ta);
+    const actions = document.createElement('div');
+    actions.className = 'jupyter-cell-actions';
+    const runBtn = document.createElement('button');
+    runBtn.type = 'button';
+    runBtn.className = 'jupyter-run';
+    runBtn.title = 'Run cell (Shift+Enter or Ctrl+Enter)';
+    runBtn.textContent = '▶';
+    const delBtn = document.createElement('button');
+    delBtn.type = 'button';
+    delBtn.className = 'icon-btn';
+    delBtn.title = 'Delete cell';
+    delBtn.textContent = '✕';
+    actions.append(runBtn, delBtn);
+    row.append(gutter, editor, actions);
+    const out = document.createElement('div');
+    out.className = 'jupyter-out';
+    box.append(row, out);
+
+    cellMeta.set(cell.id, { outEl: out, runEl: runBtn, ta, hl, gutter });
+
+    const sync = () => {
+      hl.innerHTML = PiTechJupyter.highlight(ta.value, nb.lang) + '\n';
+      const lines = ta.value.split('\n').length;
+      gutter.replaceChildren(...Array.from({ length: lines }, (_, i) => {
+        const s = document.createElement('span');
+        s.textContent = i + 1;
+        return s;
+      }));
+      ta.style.height = 'auto';
+      // cap editor height so a long cell can't push the output off-screen
+      ta.style.height = Math.min(Math.max(ta.scrollHeight, 30), 220) + 'px';
+      hl.scrollTop = ta.scrollTop;
+      hl.scrollLeft = ta.scrollLeft;
+      gutter.scrollTop = ta.scrollTop;
+    };
+    ta.addEventListener('input', () => {
+      cell.code = ta.value;
+      sync();
+      saveJupyterState();
+    });
+    ta.addEventListener('scroll', () => {
+      hl.scrollTop = ta.scrollTop;
+      hl.scrollLeft = ta.scrollLeft;
+      gutter.scrollTop = ta.scrollTop;
+    });
+    ta.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && (e.shiftKey || e.ctrlKey)) {
+        e.preventDefault();
+        runCell(nb, cell);
+      } else if (e.key === 'Tab') {
+        e.preventDefault();
+        const s = ta.selectionStart;
+        ta.setRangeText('    ', s, ta.selectionEnd, 'end');
+        cell.code = ta.value;
+        sync();
+        saveJupyterState();
+      }
+    });
+    runBtn.addEventListener('click', () => runCell(nb, cell));
+    delBtn.addEventListener('click', () => {
+      if (nb.cells.length === 1) {
+        cell.code = ''; cell.outputs = []; cell.execCount = null;
+      } else {
+        nb.cells.splice(nb.cells.indexOf(cell), 1);
+      }
+      saveJupyterState();
+      renderJupyter();
+    });
+
+    renderOutputs(cell, out);
+    sync();
+    return box;
+  }
+  function renderOutputs(cell, out) {
+    out.replaceChildren();
+    for (const o of cell.outputs) appendOutput(out, o, true);
+  }
+  function appendOutput(out, o, stored) {
+    if (o.type === 'preview') {
+      const wrap = document.createElement('div');
+      wrap.className = 'j-preview';
+      const frame = document.createElement('iframe');
+      frame.setAttribute('sandbox', 'allow-scripts');
+      frame.srcdoc = o.html;
+      wrap.appendChild(frame);
+      out.appendChild(wrap);
+      return;
+    }
+    if (o.type === 'stream' || o.type === 'result' || o.type === 'error' || o.type === 'html') {
+      if (o.type === 'result' && o.label != null) {
+        const label = document.createElement('div');
+        label.className = 'j-o j-label';
+        label.textContent = `Out[${o.label}]:`;
+        out.appendChild(label);
+      }
+      const div = document.createElement('div');
+      div.className = 'j-o' + (o.name === 'stderr' ? ' stderr' : '') + (o.type === 'error' ? ' j-error' : '');
+      div.textContent = o.text;
+      out.appendChild(div);
+    } else if (o.type === 'image') {
+      if (o.label != null) {
+        const label = document.createElement('div');
+        label.className = 'j-o j-label';
+        label.textContent = `Out[${o.label}]:`;
+        out.appendChild(label);
+      }
+      const img = document.createElement('img');
+      img.alt = 'kernel image output';
+      img.src = `data:image/png;base64,${o.png}`;
+      out.appendChild(img);
+    } else if (o.type === 'exec') {
+      const label = document.createElement('div');
+      label.className = 'j-o j-label';
+      label.textContent = `In [${o.count}]:`;
+      out.appendChild(label);
+    } else if (o.type === 'busy' && !stored) {
+      const div = document.createElement('div');
+      div.className = 'j-o j-busy';
+      div.textContent = 'running…';
+      out.appendChild(div);
+    }
+  }
+
+  // ---- execution ------------------------------------------------------------
+  function appendPreview(out, cell, htmlDoc) {
+    // sandboxed live preview for HTML / CSS cells
+    cell.outputs = [{ type: 'preview', html: htmlDoc }];
+    const wrap = document.createElement('div');
+    wrap.className = 'j-preview';
+    const frame = document.createElement('iframe');
+    frame.setAttribute('sandbox', 'allow-scripts');
+    frame.srcdoc = htmlDoc;
+    wrap.appendChild(frame);
+    out.replaceChildren(wrap);
+  }
+  function buildPreviewDoc(lang, code) {
+    if (lang === 'css') {
+      return `<!doctype html><html><head><style>${code}</style></head><body>` +
+        `<div class="demo"><h1>Preview</h1><p class="demo-text">Sample text</p><button class="demo-btn">Button</button>` +
+        `<a class="demo-link" href="#">Link</a><div class="demo-box">Box</div></div>` +
+        `<style>.demo{padding:16px;font-family:sans-serif;color:#222}</style></body></html>`;
+    }
+    return code;
+  }
+  async function runCellPreview(nb, cell, meta) {
+    runBtnSet(meta, true);
+    appendPreview(meta.outEl, cell, buildPreviewDoc(nb.lang, cell.code));
+    saveJupyterState();
+    runBtnSet(meta, false);
+  }
+  async function runCellExec(nb, cell, meta) {
+    runBtnSet(meta, true);
+    const busyEl = document.createElement('div');
+    busyEl.className = 'j-o j-busy';
+    busyEl.textContent = 'running…';
+    meta.outEl.appendChild(busyEl);
+    try {
+      const r = await fetch('/api/lang/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lang: nb.lang, code: cell.code }) });
+      const data = await r.json();
+      meta.outEl.replaceChildren();
+      cell.outputs = [];
+      if (data.error) {
+        cell.outputs.push({ type: 'error', text: data.error });
+        appendOutput(meta.outEl, { type: 'error', text: data.error }, false);
+      } else {
+        if (data.stdout) { cell.outputs.push({ type: 'stream', name: 'stdout', text: data.stdout }); appendOutput(meta.outEl, { type: 'stream', name: 'stdout', text: data.stdout }, false); }
+        if (data.stderr) { cell.outputs.push({ type: 'stream', name: 'stderr', text: data.stderr }); appendOutput(meta.outEl, { type: 'stream', name: 'stderr', text: data.stderr }, false); }
+        if (!data.stdout && !data.stderr) {
+          const status = data.timedOut ? 'timed out' : `exit ${data.code ?? '?'}`;
+          cell.outputs.push({ type: 'result', label: null, text: `(${status})` });
+          appendOutput(meta.outEl, { type: 'result', label: null, text: `(${status})` }, false);
+        }
+      }
+      saveJupyterState();
+    } catch (e) {
+      meta.outEl.replaceChildren();
+      const div = document.createElement('div');
+      div.className = 'j-o j-error';
+      div.textContent = `run failed: ${e.message}`;
+      meta.outEl.appendChild(div);
+    }
+    runBtnSet(meta, false);
+  }
+  async function runCell(nb, cell) {
+    const meta = cellMeta.get(cell.id);
+    if (!meta) return;
+    if (nb.lang === 'html' || nb.lang === 'css') { await runCellPreview(nb, cell, meta); return; }
+    if (nb.lang !== 'python') {
+      // non-Python: check availability first, then run server-side
+      runBtnSet(meta, true);
+      let avail;
+      try {
+        const r = await fetch('/api/lang/check', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lang: nb.lang }) });
+        avail = await r.json();
+      } catch { avail = { available: false, error: 'Could not reach the PiTech server' }; }
+      runBtnSet(meta, false);
+      if (!avail.available) {
+        meta.outEl.replaceChildren();
+        cell.outputs = [{ type: 'error', text: avail.error || `Language is not available: ${nb.lang}` }];
+        appendOutput(meta.outEl, { type: 'error', text: cell.outputs[0].text }, false);
+        saveJupyterState();
+        return;
+      }
+      await runCellExec(nb, cell, meta);
+      return;
+    }
+    runBtnSet(meta, true);
+    meta.outEl.replaceChildren();
+    const busyEl = document.createElement('div');
+    busyEl.className = 'j-o j-busy';
+    busyEl.textContent = 'running…';
+    meta.outEl.appendChild(busyEl);
+    setKernelState(nb.id, 'busy', 'kernel: busy');
+    try {
+      await ensureKernel(nb.id);
+    } catch (e) {
+      meta.outEl.replaceChildren();
+      const div = document.createElement('div');
+      div.className = 'j-o j-error';
+      div.textContent = `Could not start kernel: ${e.message}`;
+      meta.outEl.appendChild(div);
+      runBtnSet(meta, false);
+      setKernelState(nb.id, 'off', 'kernel: error');
+      return;
+    }
+    meta.outEl.replaceChildren();
+    cell.outputs = [];
+    cell.execCount = null;
+    const pushOut = (o) => {
+      if (o.type === 'exec') {
+        cell.execCount = o.count;
+      } else if (o.type === 'stream') {
+        const last = cell.outputs[cell.outputs.length - 1];
+        if (last && last.type === 'stream' && last.name === o.name) {
+          last.text += o.text;
+          const existing = meta.outEl.querySelector(`[data-stream="${o.name}"]`);
+          if (existing) existing.textContent = last.text;
+          else {
+            const div = document.createElement('div');
+            div.className = 'j-o' + (o.name === 'stderr' ? ' stderr' : '');
+            div.dataset.stream = o.name;
+            div.textContent = last.text;
+            meta.outEl.appendChild(div);
+          }
+          return;
+        }
+        cell.outputs.push({ type: 'stream', name: o.name, text: o.text });
+        const div = document.createElement('div');
+        div.className = 'j-o' + (o.name === 'stderr' ? ' stderr' : '');
+        div.dataset.stream = o.name;
+        div.textContent = o.text;
+        meta.outEl.appendChild(div);
+        return;
+      } else if (o.type === 'error') {
+        cell.outputs.push({ type: 'error', text: o.text });
+      } else if (o.type === 'result') {
+        cell.outputs.push({ type: 'result', label: o.label, text: o.text });
+      } else if (o.type === 'image') {
+        cell.outputs.push({ type: 'image', label: o.label, png: o.png });
+      }
+      appendOutput(meta.outEl, o, false);
+    };
+    const k = jupyterKernels.get(nb.id);
+    const sent = k && sendExecute(nb.id, cell.code, (o) => { try { pushOut(o); } catch {} }, () => {
+      // cap what we persist so localStorage survives big outputs
+      for (const o of cell.outputs) {
+        if (o.type !== 'image' && o.text && o.text.length > OUT_TEXT_CAP) o.text = o.text.slice(0, OUT_TEXT_CAP) + '\n… (truncated)';
+        if (o.type === 'image' && o.png && o.png.length > OUT_IMG_CAP) delete o.png;
+      }
+      saveJupyterState();
+      runBtnSet(meta, false);
+    });
+    if (!sent) {
+      meta.outEl.replaceChildren();
+      const div = document.createElement('div');
+      div.className = 'j-o j-error';
+      div.textContent = 'kernel connection lost — try again';
+      meta.outEl.appendChild(div);
+      runBtnSet(meta, false);
+    }
+  }
+  function runBtnSet(meta, busy) {
+    if (meta?.runEl) meta.runEl.classList.toggle('running', busy);
+  }
+
+  // ---- notebook tabs --------------------------------------------------------
+  function selectJupyter(id) {
+    if (!jupyterState.notebooks.some((nb) => nb.id === id)) return;
+    jupyterState.activeId = id;
+    saveJupyterState();
+    renderJupyter();
+  }
+  function newJupyterNotebook() {
+    let n = jupyterState.notebooks.length + 1;
+    while (jupyterState.notebooks.some((nb) => nb.title === `Notebook ${n}`)) n++;
+    const nb = { id: createJupyterId(), title: `Notebook ${n}`, lang: activeNotebook()?.lang || 'python', cells: [{ id: createJupyterId(), code: '', outputs: [], execCount: null }] };
+    jupyterState.notebooks.push(nb);
+    jupyterState.activeId = nb.id;
+    saveJupyterState();
+    renderJupyter();
+    jupyterBody.querySelector('textarea')?.focus();
+  }
+  function renameJupyter(id = jupyterState.activeId) {
+    const nb = jupyterState.notebooks.find((item) => item.id === id);
+    if (!nb) return;
+    promptModal('Rename Notebook', nb.title, (title) => {
+      nb.title = title;
+      saveJupyterState();
+      renderJupyter();
+    });
+  }
+  function deleteJupyterNotebook(id = jupyterState.activeId) {
+    const index = jupyterState.notebooks.findIndex((nb) => nb.id === id);
+    if (index < 0) return;
+    const nb = jupyterState.notebooks[index];
+    confirmModal('Delete Notebook?', `Delete "${nb.title}"? This cannot be undone.`, 'Delete', () => {
+      dropKernel(nb.id);
+      if (jupyterState.notebooks.length === 1) {
+        const replacement = { id: createJupyterId(), title: 'Notebook 1', lang: nb.lang, cells: [{ id: createJupyterId(), code: '', outputs: [], execCount: null }] };
+        jupyterState.notebooks.splice(0, 1, replacement);
+        jupyterState.activeId = replacement.id;
+      } else {
+        jupyterState.notebooks.splice(index, 1);
+        if (jupyterState.activeId === id) jupyterState.activeId = jupyterState.notebooks[Math.min(index, jupyterState.notebooks.length - 1)].id;
+      }
+      saveJupyterState();
+      renderJupyter();
+    });
+  }
+  function openJupyter() {
+    applyJupyterSaved();
+    renderJupyter();
+    jupyterPanel.classList.remove('hidden');
+    setTimeout(() => jupyterBody.querySelector('textarea')?.focus(), 30);
+  }
+  function closeJupyter() { jupyterPanel.classList.add('hidden'); }
+
+  $('jupyter-btn').addEventListener('click', async () => {
+    if (!jupyterPanel.classList.contains('hidden')) { jupyterBody.querySelector('textarea')?.focus(); return; }
+    let st;
+    try {
+      const r = await fetch('/api/jupyter/status');
+      st = await r.json();
+    } catch {
+      showToast('Could not reach the PiTech server');
+      return;
+    }
+    if (st.installUrl) jupyterInstallUrl = st.installUrl;
+    if (typeof st.installed !== 'boolean') {
+      // Bad/unknown response (e.g. stale server without the jupyter routes):
+      // surface an error instead of misreporting jupyter as not installed.
+      showToast('Jupyter status unavailable — restart the PiTech server');
+      return;
+    }
+    if (!st.installed) {
+      showToast('Jupyter is not installed — opening the install page');
+      window.open(jupyterInstallUrl, '_blank', 'noopener');
+      return;
+    }
+    openJupyter();
+  });
+  $('jupyter-close').addEventListener('click', closeJupyter);
+  $('jupyter-new-tab').addEventListener('click', newJupyterNotebook);
+  $('jupyter-rename').addEventListener('click', () => renameJupyter());
+  jupyterLangSel.addEventListener('change', () => {
+    const nb = activeNotebook();
+    if (!nb) return;
+    nb.lang = jupyterLangSel.value;
+    saveJupyterState();
+    renderJupyter();
+  });
+  $('jupyter-restart-kernel').addEventListener('click', async () => {
+    const nb = activeNotebook();
+    if (!nb) return;
+    const wasBusy = jupyterKernels.get(nb.id)?.state === 'busy';
+    await dropKernel(nb.id);
+    setKernelState(nb.id, 'off', 'kernel: off');
+    showToast(wasBusy ? 'Kernel restarted (running cell stopped)' : 'Kernel restarted — state cleared');
+  });
+  for (const { id, label } of PiTechJupyter.languages()) {
+    const opt = document.createElement('option');
+    opt.value = id;
+    opt.textContent = label;
+    jupyterLangSel.appendChild(opt);
+  }
+  const applyJupyterSaved = makePanelMoveable(jupyterPanel, 'jupyter-head', 'jupyter-resize', 'pi-jupyter-panel');
 
   function loadSession(file, title) {
     sessTitle.textContent = title || 'Conversation';
@@ -1591,6 +2223,7 @@
       case 'ctxhead': return 'context folder';
       case 'projhead': return 'projects';
       case 'notepad-tab': return 'notepad tab · ' + ctx.name;
+      case 'jupyter-tab': return 'jupyter notebook · ' + ctx.name;
       default: return String(ctx.kind || 'pi');
     }
   }
@@ -1837,6 +2470,11 @@
     if (ctx.kind === 'notepad-tab') {
       items.push({ label: 'Rename Tab', run: () => renameNotepad(ctx.id) });
       items.push({ label: 'Delete Tab', danger: true, run: () => deleteNotepad(ctx.id) });
+      return items;
+    }
+    if (ctx.kind === 'jupyter-tab') {
+      items.push({ label: 'Rename Notebook', run: () => renameJupyter(ctx.id) });
+      items.push({ label: 'Delete Notebook', danger: true, run: () => deleteJupyterNotebook(ctx.id) });
       return items;
     }
     const selected = selectedEntriesFor(ctx);
