@@ -15,9 +15,9 @@ const CASES = {
   nodejs: { cells: ['console.log("hello");\nconst x = 7;\nconsole.log(x);'], expect: [['hello', '7']] },
   shell: { cells: ['echo "hello"\nx=7\necho $x'], expect: [['hello', '7']] },
   r: { cells: ['cat("hello\\n")\nx <- 7\ncat(x, "\\n")'], expect: [['hello', '7']], notExpect: ['HaxTech'], required: true },
-  java: {
-    cells: ['public class Main {\n  public static void main(String[] args) {\n    System.out.println("hello");\n    int x = 7;\n    System.out.println(x);\n  }\n}'],
-    expect: [['hello', '7']], required: true,
+  groovy: {
+    cells: ['def x = 7\nprintln("hello")\nprintln(x)'],
+    expect: [['hello', '7']], required: false, // groovy toolchain optional
   },
   c: { cells: ['#include <stdio.h>\nint main() {\n  printf("hello\\n");\n  int x = 7;\n  printf("%d\\n", x);\n  return 0;\n}'], expect: [['hello', '7']], required: true },
   cpp: { cells: ['#include <iostream>\nint main() {\n  std::cout << "hello" << std::endl;\n  int x = 7;\n  std::cout << x << std::endl;\n  return 0;\n}'], expect: [['hello', '7']], required: true },
@@ -55,7 +55,7 @@ async function main() {
     const results = {};
     for (const [lang, spec] of Object.entries(CASES)) {
       // required = toolchain expected on this host; optional = skip politely
-      const bins = { javascript: ['node'], nodejs: ['node'], shell: ['bash'], r: ['Rscript'], java: ['java'], c: ['gcc'], cpp: ['g++'], csharp: ['dotnet'], lua: ['lua'], luau: ['luau'] }[lang] || [];
+      const bins = { javascript: ['node'], nodejs: ['node'], shell: ['bash'], r: ['Rscript'], groovy: ['groovy'], c: ['gcc'], cpp: ['g++'], csharp: ['dotnet'], lua: ['lua'], luau: ['luau'] }[lang] || [];
       // ask the live server (it holds the toolchain PATH)
       const avail = await httpPost(port, '/api/lang/check', { lang });
       if (!avail.available && !spec.required) { results[lang] = 'skipped (no toolchain)'; continue; }

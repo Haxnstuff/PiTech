@@ -54,7 +54,7 @@ async function main() {
       rightOfNotepad: true,
       panel: true,
       langSelect: true,
-      langs: ['python', 'javascript', 'nodejs', 'html', 'css', 'java', 'c', 'cpp', 'csharp', 'lua', 'luau', 'shell', 'r'],
+      langs: ['python', 'javascript', 'nodejs', 'html', 'css', 'groovy', 'c', 'cpp', 'csharp', 'lua', 'luau', 'shell', 'r'],
     }, 'Jupyter button must sit right of Notepad with all panel languages in the selector');
 
     // A malformed status response (e.g. stale server predating the jupyter

@@ -29,7 +29,7 @@ test('javascript runs via node', async () => {
 });
 
 test('unavailable language reports install hint', async () => {
-  const r = await langRun('lua', 'print(1)');
+  const r = await langRun('not-a-real-lang', 'print(1)');
   assert.equal(r.ok, false);
   assert.match(r.error, /Language is not available/);
 });

@@ -32,7 +32,19 @@ const LANG_BACKENDS = {
   // into stdout even with --vanilla, so run Rterm --no-echo with the code on
   // stdin instead — clean stdout, no banner.
   r: { find: ['Rscript'], ext: '.r', stdin: true, run: () => null },
-  java: { find: ['javac', 'java'], ext: '.java', run: (f) => ({ cmd: 'java', args: [f] }) },
+  // Groovy: `groovy.bat` ends with `%COMSPEC% /C exit` which trips cmd AutoRun
+  // (HaxTech banner leaks into stdout), so invoke java directly over Groovy's
+  // jars — the classpath startGroovy.bat assembles, extras-jaxb if shipped.
+  groovy: {
+    find: ['groovy'], ext: '.groovy',
+    run: (f) => {
+      const home = path.dirname(path.dirname(binCache.get('groovy')));
+      const cp = [path.join(home, 'lib', '*')];
+      const extras = path.join(home, 'lib', 'extras-jaxb');
+      if (fs.existsSync(extras)) cp.push(path.join(extras, '*'));
+      return { cmd: 'java', args: ['-cp', cp.join(path.delimiter), 'groovy.ui.GroovyMain', f] };
+    },
+  },
   c: { find: ['gcc'], ext: '.c', shell: 'gcc "{src}" -o "{out}" && "{out}"' },
   cpp: { find: ['g++'], ext: '.cpp', shell: 'g++ "{src}" -o "{out}" && "{out}"' },
   csharp: { find: ['dotnet'], ext: '.cs', shell: 'dotnet run "{src}"', needsSdk: true },

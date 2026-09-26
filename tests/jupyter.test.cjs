@@ -36,7 +36,7 @@ test('default language is python and language list exposes it', () => {
 const LANG_SAMPLES = {
   html: '<!-- note --><div class="box">hi</div>',
   css: 'body { color: #fff; margin: 0 auto; }',
-  java: 'public class Main { void run() { int x = 1; } }',
+  groovy: 'def x = 1\nprintln(x)',
   c: '#include <stdio.h>\nint main() { return 0; }',
   cpp: 'class A { public: void f() { return; } };',
   csharp: 'using System;\npublic class A { static void M() { var x = 1; } }',
@@ -55,7 +55,7 @@ test('every panel language is valid and highlights keywords', () => {
 });
 
 test('new languages still escape html and color comments/strings', () => {
-  assert.ok(jtk.highlight('s = "a&b"', 'java').includes('&amp;'));
+  assert.ok(jtk.highlight('s = "a&b"', 'groovy').includes('&amp;'));
   assert.ok(jtk.highlight('/* note */', 'cpp').includes('jtk-comment'));
   assert.ok(jtk.highlight('s = "hi"', 'lua').includes('jtk-string'));
   assert.ok(jtk.highlight('<!-- x -->', 'html').includes('jtk-comment'));
