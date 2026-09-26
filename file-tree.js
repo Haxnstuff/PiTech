@@ -10,7 +10,7 @@ function isWithin(root, target) {
 }
 
 // Text extensions viewable/editable in the in-browser file explorer.
-const TEXT_EXTS = ['.md', '.txt', '.cfg', '.json', '.jsonl', '.log', '.js', '.cjs', '.mjs', '.ts', '.tsx', '.jsx', '.css', '.html', '.htm', '.xml', '.yaml', '.yml', '.toml', '.ini', '.py', '.rs', '.go', '.java', '.c', '.h', '.cpp', '.hpp', '.sh', '.ps1', '.bat', '.sql'];
+const TEXT_EXTS = ['.md', '.txt', '.cfg', '.json', '.jsonl', '.log', '.js', '.cjs', '.mjs', '.ts', '.tsx', '.jsx', '.css', '.html', '.htm', '.xml', '.yaml', '.yml', '.toml', '.ini', '.py', '.rs', '.go', '.groovy', '.java', '.c', '.h', '.cpp', '.hpp', '.sh', '.ps1', '.bat', '.sql'];
 
 // Shared guard for /api/file (view) and /api/file/save (edit).
 function isAllowedFile(roots, p) {

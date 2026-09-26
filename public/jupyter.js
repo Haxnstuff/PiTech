@@ -36,9 +36,9 @@
       re: /(\/\*[\s\S]*?\*\/)|("(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*')|(@[a-zA-Z-]+|\b[a-zA-Z-]+(?=\s*:))|(#[0-9a-fA-F]{3,8}\b|\b\d+(?:\.\d+)?(?:px|em|rem|vh|vw|%|s|ms|deg|fr)?\b)|\b[a-zA-Z-]+(?=\()/g,
       cls: ['jtk-comment', 'jtk-string', 'jtk-keyword', 'jtk-number', 'jtk-fn'],
     },
-    java: {
-      label: 'Java',
-      re: /(\/\/[^\n]*|\/\*[\s\S]*?\*\/)|("(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*')|\b(abstract|assert|boolean|break|byte|case|catch|char|class|const|continue|default|do|double|else|enum|extends|final|finally|float|for|goto|if|implements|import|instanceof|int|interface|long|native|new|package|private|protected|public|record|return|short|static|strictfp|super|switch|synchronized|this|throw|throws|transient|try|var|void|volatile|while|true|false|null)\b|\b(\d+(?:\.\d+)?[fFdDlL]?)\b|\b(System|String|Math|Integer|Double|Boolean|Object|List|Map|ArrayList|HashMap|Scanner|Exception|Thread)\b/g,
+    groovy: {
+      label: 'Groovy',
+      re: /(\/\/[^\n]*|\/\*[\s\S]*?\*\/)|("(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*')|\b(abstract|as|assert|boolean|break|byte|case|catch|char|class|const|continue|def|default|do|double|else|enum|extends|final|finally|float|for|goto|if|implements|import|in|instanceof|int|interface|long|native|new|package|private|protected|public|record|return|short|static|strictfp|super|switch|synchronized|this|throw|throws|trait|transient|try|var|void|volatile|while|true|false|null)\b|\b(\d+(?:\.\d+)?[fFdDlL]?)\b|\b(println|print|System|String|Math|Integer|Double|Boolean|Object|List|Map|ArrayList|HashMap|Scanner|Exception|Thread)\b/g,
       cls: ['jtk-comment', 'jtk-string', 'jtk-keyword', 'jtk-number', 'jtk-fn'],
     },
     c: {
